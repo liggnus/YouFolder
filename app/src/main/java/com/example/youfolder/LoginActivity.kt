@@ -20,15 +20,12 @@ class LoginActivity : ComponentActivity() {
     private val authService by lazy { AuthorizationService(this) }
     private var authState: AuthState? = null
 
-    // Google discovery doc (same as old MainActivity)
     private val discoveryUri: Uri =
         Uri.parse("https://accounts.google.com/.well-known/openid-configuration")
 
-    // SAME clientId that worked before
     private val clientId: String =
         "978706435903-09c7vrppjvo0102p87o9g6p68ejvv428.apps.googleusercontent.com"
 
-    // EXACT same redirect that worked before
     private val redirectUri: Uri =
         Uri.parse("com.example.youfolder:/oauth2redirect")
 
@@ -45,7 +42,6 @@ class LoginActivity : ComponentActivity() {
                     if (tokenResp != null) {
                         authState?.update(tokenResp, tokenEx)
 
-                        // ✅ we are logged in: send AuthState to MainActivity
                         val json = authState!!.jsonSerializeString()
                         startActivity(
                             Intent(this, MainActivity::class.java)
@@ -83,7 +79,8 @@ class LoginActivity : ComponentActivity() {
                     "openid",
                     "email",
                     "profile",
-                    "https://www.googleapis.com/auth/youtube.readonly"
+                    // 🔹 this scope lets us CREATE / EDIT playlists
+                    "https://www.googleapis.com/auth/youtube"
                 )
                 .build()
 
