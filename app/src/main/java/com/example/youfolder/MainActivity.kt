@@ -1,6 +1,7 @@
 package com.example.youfolder
 
 import android.app.AlertDialog
+import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -20,6 +21,7 @@ import retrofit2.Callback
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.POST
@@ -38,10 +40,13 @@ class MainActivity : ComponentActivity() {
     private val adapter = PlaylistsAdapter()
 
     private val handler = Handler(Looper.getMainLooper())
+    private lateinit var folderStore: FolderStore
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        folderStore = FolderStore(this)
 
         swipeRefresh = findViewById(R.id.swipeRefresh)
         rv = findViewById(R.id.rvPlaylists)
@@ -49,6 +54,30 @@ class MainActivity : ComponentActivity() {
 
         rv.layoutManager = LinearLayoutManager(this)
         rv.adapter = adapter
+
+        // Tap → open playlist detail (videos + sub-folders)
+        adapter.onItemClick = { playlist ->
+            val state = authState
+            if (state == null) {
+                android.widget.Toast.makeText(
+                    this,
+                    "Auth missing, please sign in again.",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
+            } else {
+                val intent = Intent(this, PlaylistDetailActivity::class.java).apply {
+                    putExtra("id", playlist.id)
+                    putExtra("title", playlist.snippet.title)
+                    putExtra("authStateJson", state.jsonSerializeString())
+                }
+                startActivity(intent)
+            }
+        }
+
+        // Long press → manage (move / remove / delete)
+        adapter.onItemLongClick = { playlist ->
+            showManageDialog(playlist)
+        }
 
         // Pull-to-refresh → reload playlists
         swipeRefresh.setOnRefreshListener {
@@ -60,7 +89,6 @@ class MainActivity : ComponentActivity() {
         if (!authJson.isNullOrBlank()) {
             try {
                 authState = AuthState.jsonDeserialize(authJson)
-                // Auto-load playlists as soon as we have a valid AuthState
                 swipeRefresh.isRefreshing = true
                 loadPlaylists()
             } catch (e: Exception) {
@@ -83,6 +111,82 @@ class MainActivity : ComponentActivity() {
 
         btnAdd.setOnClickListener { showCreatePlaylistDialog() }
     }
+
+    // 🔁 Whenever we return to this screen, reload structure from FolderStore
+    override fun onResume() {
+        super.onResume()
+        // Do not show spinner here, just quietly refresh
+        loadPlaylists()
+    }
+
+    // ---------- Manage menu ----------
+
+    private fun showManageDialog(playlist: PlaylistItem) {
+        val options = mutableListOf<String>()
+        val actions = mutableListOf<() -> Unit>()
+
+        options += "Move into folder"
+        actions += { showMoveIntoFolderDialog(playlist) }
+
+        if (folderStore.getParent(playlist.id) != null) {
+            options += "Remove from folder"
+            actions += {
+                folderStore.clearParent(playlist.id)
+                android.widget.Toast.makeText(
+                    this,
+                    "Removed from folder",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+                loadPlaylists()
+            }
+        }
+
+        options += "Delete from YouTube"
+        actions += { showDeleteDialog(playlist) }
+
+        AlertDialog.Builder(this)
+            .setTitle(playlist.snippet.title)
+            .setItems(options.toTypedArray()) { _, which ->
+                actions[which].invoke()
+            }
+            .show()
+    }
+
+    private fun showMoveIntoFolderDialog(playlist: PlaylistItem) {
+        val all = adapter.currentItems()
+        val candidates = all.filter { it.id != playlist.id }
+
+        if (candidates.isEmpty()) {
+            android.widget.Toast.makeText(
+                this,
+                "No other playlists to move into.",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        val names = candidates.map { it.snippet.title }.toTypedArray()
+
+        AlertDialog.Builder(this)
+            .setTitle("Move into folder")
+            .setItems(names) { _, which ->
+                val parent = candidates[which]
+                folderStore.setParent(playlist.id, parent.id)
+                android.widget.Toast.makeText(
+                    this,
+                    "Moved into \"${parent.snippet.title}\"",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+
+                // Immediately hide from root list
+                val updated = adapter.currentItems().filter { it.id != playlist.id }
+                adapter.submit(updated)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // ---------- Create playlist ----------
 
     private fun showCreatePlaylistDialog() {
         val input = EditText(this).apply {
@@ -118,7 +222,6 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        // Show spinner while creating
         runOnUiThread { swipeRefresh.isRefreshing = true }
 
         state.performActionWithFreshTokens(authService) { accessToken, _, ex ->
@@ -188,7 +291,6 @@ class MainActivity : ComponentActivity() {
                         ).show()
                     }
 
-                    // 🔁 Wait a bit so YouTube updates, then reload
                     handler.postDelayed({
                         swipeRefresh.isRefreshing = true
                         loadPlaylists()
@@ -209,6 +311,115 @@ class MainActivity : ComponentActivity() {
             })
         }
     }
+
+    // ---------- Delete playlist ----------
+
+    private fun showDeleteDialog(playlist: PlaylistItem) {
+        AlertDialog.Builder(this)
+            .setTitle("Delete playlist")
+            .setMessage("Delete \"${playlist.snippet.title}\" from YouTube?")
+            .setPositiveButton("Delete") { _, _ ->
+                deletePlaylist(playlist)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun deletePlaylist(playlist: PlaylistItem) {
+        val state = authState ?: run {
+            android.widget.Toast.makeText(
+                this,
+                "Please sign in first.",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        runOnUiThread { swipeRefresh.isRefreshing = true }
+
+        state.performActionWithFreshTokens(authService) { accessToken, _, ex ->
+            if (ex != null) {
+                Log.e("API", "Token refresh failed (deletePlaylist)", ex)
+                runOnUiThread {
+                    swipeRefresh.isRefreshing = false
+                    android.widget.Toast.makeText(
+                        this,
+                        "Auth error: ${ex.error}",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+                return@performActionWithFreshTokens
+            }
+
+            if (accessToken.isNullOrBlank()) {
+                runOnUiThread {
+                    swipeRefresh.isRefreshing = false
+                    android.widget.Toast.makeText(
+                        this,
+                        "No access token. Please sign in again.",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+                return@performActionWithFreshTokens
+            }
+
+            val api = youtubeService()
+            api.deletePlaylist(
+                id = playlist.id,
+                auth = "Bearer $accessToken"
+            ).enqueue(object : Callback<Void> {
+                override fun onResponse(
+                    call: Call<Void>,
+                    response: retrofit2.Response<Void>
+                ) {
+                    if (!response.isSuccessful) {
+                        val errorBodyString = response.errorBody()?.string() ?: "Unknown error"
+                        val errorCode = response.code()
+                        Log.e(
+                            "API",
+                            "Delete playlist HTTP $errorCode ${response.message()} — $errorBodyString"
+                        )
+                        runOnUiThread {
+                            swipeRefresh.isRefreshing = false
+                            android.widget.Toast.makeText(
+                                this@MainActivity,
+                                "Failed to delete playlist ($errorCode)",
+                                android.widget.Toast.LENGTH_LONG
+                            ).show()
+                        }
+                        return
+                    }
+
+                    runOnUiThread {
+                        android.widget.Toast.makeText(
+                            this@MainActivity,
+                            "Deleted \"${playlist.snippet.title}\"",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    }
+
+                    handler.postDelayed({
+                        swipeRefresh.isRefreshing = true
+                        loadPlaylists()
+                    }, 1500L)
+                }
+
+                override fun onFailure(call: Call<Void>, t: Throwable) {
+                    Log.e("API", "Network failure (deletePlaylist)", t)
+                    runOnUiThread {
+                        swipeRefresh.isRefreshing = false
+                        android.widget.Toast.makeText(
+                            this@MainActivity,
+                            "Network error: ${t.localizedMessage}",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            })
+        }
+    }
+
+    // ---------- Load playlists (root only) ----------
 
     private fun loadPlaylists() {
         val state = authState ?: run {
@@ -278,12 +489,16 @@ class MainActivity : ComponentActivity() {
                     }
 
                     val items = response.body()?.items.orEmpty()
+                    // Only root playlists (no parent)
+                    val roots = items.filter { folderStore.getParent(it.id) == null }
+
                     runOnUiThread {
                         swipeRefresh.isRefreshing = false
-                        adapter.submit(items)
+                        adapter.submit(roots)
+                        // You can comment this out if the toast is annoying on every resume
                         android.widget.Toast.makeText(
                             this@MainActivity,
-                            "Loaded ${items.size} playlists",
+                            "Loaded ${roots.size} playlists",
                             android.widget.Toast.LENGTH_SHORT
                         ).show()
                     }
@@ -303,6 +518,8 @@ class MainActivity : ComponentActivity() {
             })
         }
     }
+
+    // ---------- Retrofit setup ----------
 
     private fun youtubeService(): YouTubeApi {
         val log = HttpLoggingInterceptor().apply {
@@ -347,6 +564,12 @@ interface YouTubeApi {
         @Query("part") part: String,
         @Header("Authorization") auth: String,
         @Body body: CreatePlaylistRequest
+    ): Call<Void>
+
+    @DELETE("youtube/v3/playlists")
+    fun deletePlaylist(
+        @Query("id") id: String,
+        @Header("Authorization") auth: String
     ): Call<Void>
 }
 

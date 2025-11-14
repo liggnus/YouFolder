@@ -29,6 +29,11 @@
             android:name=".MainActivity"
             android:exported="false" />
 
+        <!-- Playlist detail screen (videos inside a playlist) -->
+        <activity
+            android:name=".PlaylistDetailActivity"
+            android:exported="false" />
+
         <!-- AppAuth redirect handler (same as old working manifest) -->
         <activity
             android:name="net.openid.appauth.RedirectUriReceiverActivity"
