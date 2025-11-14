@@ -2,8 +2,10 @@ package com.example.youfolder
 
 import android.app.AlertDialog
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.util.Log
+import android.widget.Button
 import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
@@ -19,8 +21,11 @@ import retrofit2.Callback
 import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
+import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Header
+import retrofit2.http.POST
 import retrofit2.http.Query
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -39,6 +44,11 @@ class PlaylistDetailActivity : ComponentActivity() {
 
     private lateinit var playlistId: String
     private lateinit var playlistTitle: String
+
+    private lateinit var btnToggleSelection: Button
+    private lateinit var btnMoveSelected: Button
+
+    private val videoRows = mutableListOf<VideoRow>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -82,6 +92,37 @@ class PlaylistDetailActivity : ComponentActivity() {
         rvVideos.layoutManager = LinearLayoutManager(this)
         rvVideos.adapter = videoAdapter
 
+        // new: open video when not in selection mode
+        videoAdapter.onVideoClick = { row ->
+            val url = "https://www.youtube.com/watch?v=${row.videoId}"
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            // Android will pick YouTube app if installed, otherwise browser
+            startActivity(intent)
+        }
+
+        btnToggleSelection = findViewById(R.id.btnToggleSelection)
+        btnMoveSelected = findViewById(R.id.btnMoveSelected)
+
+        btnToggleSelection.setOnClickListener {
+            videoAdapter.selectionMode = !videoAdapter.selectionMode
+            btnToggleSelection.text =
+                if (videoAdapter.selectionMode) "Cancel selection" else "Select videos"
+            btnMoveSelected.isEnabled = false
+        }
+
+        videoAdapter.onSelectionChanged = { selected ->
+            btnMoveSelected.isEnabled = selected.isNotEmpty()
+        }
+
+        btnMoveSelected.setOnClickListener {
+            val selected = videoAdapter.currentItems().filter { it.selected }
+            if (selected.isEmpty()) {
+                Toast.makeText(this, "No videos selected.", Toast.LENGTH_SHORT).show()
+            } else {
+                showMoveVideosDialog(selected)
+            }
+        }
+
         val json = intent.getStringExtra("authStateJson") ?: ""
         authState = AuthState.jsonDeserialize(json)
 
@@ -89,7 +130,7 @@ class PlaylistDetailActivity : ComponentActivity() {
         loadVideos()
     }
 
-    // 🔁 When coming back to this screen, re-read subfolders
+    // 🔁 When coming back to this screen, re read subfolders
     override fun onResume() {
         super.onResume()
         loadSubPlaylists()
@@ -240,12 +281,24 @@ class PlaylistDetailActivity : ComponentActivity() {
                         return
                     }
 
-                    val titles = response.body()?.items
-                        ?.mapNotNull { it.snippet?.title }
-                        .orEmpty()
+                    val rows = response.body()?.items
+                        ?.mapNotNull { item ->
+                            val title = item.snippet?.title ?: return@mapNotNull null
+                            val vid = item.snippet.resourceId?.videoId ?: return@mapNotNull null
+                            VideoRow(
+                                playlistItemId = item.id,
+                                videoId = vid,
+                                title = title
+                            )
+                        }.orEmpty()
 
                     runOnUiThread {
-                        videoAdapter.submit(titles)
+                        videoRows.clear()
+                        videoRows.addAll(rows)
+                        videoAdapter.selectionMode = false
+                        btnToggleSelection.text = "Select videos"
+                        btnMoveSelected.isEnabled = false
+                        videoAdapter.submit(videoRows)
                     }
                 }
 
@@ -253,6 +306,164 @@ class PlaylistDetailActivity : ComponentActivity() {
                     Log.e("YT", "network fail", t)
                 }
             })
+        }
+    }
+
+    private fun showMoveVideosDialog(selected: List<VideoRow>) {
+        val selectedCopy = selected.map { it.copy() }
+
+        authState.performActionWithFreshTokens(authService) { accessToken, _, ex ->
+            if (ex != null || accessToken.isNullOrBlank()) {
+                Log.e("YT", "Token error when loading target playlists", ex)
+                return@performActionWithFreshTokens
+            }
+
+            val api = youtube()
+            api.listPlaylists(
+                part = "snippet,contentDetails",
+                mine = true,
+                maxResults = 50,
+                auth = "Bearer $accessToken"
+            ).enqueue(object : Callback<PlaylistsResponse> {
+                override fun onResponse(
+                    call: Call<PlaylistsResponse>,
+                    response: Response<PlaylistsResponse>
+                ) {
+                    if (!response.isSuccessful) {
+                        Log.e("YT", "Error loading target playlists ${response.code()}")
+                        return
+                    }
+
+                    val all = response.body()?.items.orEmpty()
+                    val candidates = all.filter { it.id != playlistId }
+
+                    if (candidates.isEmpty()) {
+                        runOnUiThread {
+                            Toast.makeText(
+                                this@PlaylistDetailActivity,
+                                "No other playlists to move into.",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        return
+                    }
+
+                    val names = candidates.map { it.snippet.title }.toTypedArray()
+
+                    runOnUiThread {
+                        AlertDialog.Builder(this@PlaylistDetailActivity)
+                            .setTitle("Move ${selectedCopy.size} video(s) to")
+                            .setItems(names) { _, which ->
+                                val target = candidates[which]
+                                moveVideosToPlaylist(selectedCopy, target.id)
+                            }
+                            .setNegativeButton("Cancel", null)
+                            .show()
+                    }
+                }
+
+                override fun onFailure(call: Call<PlaylistsResponse>, t: Throwable) {
+                    Log.e("YT", "network fail loading target playlists", t)
+                }
+            })
+        }
+    }
+
+    /**
+     * Move all selected videos to target playlist in sequence:
+     * insert then delete then next.
+     */
+    private fun moveVideosToPlaylist(selected: List<VideoRow>, targetPlaylistId: String) {
+        if (selected.isEmpty()) return
+
+        authState.performActionWithFreshTokens(authService) { accessToken, _, ex ->
+            if (ex != null || accessToken.isNullOrBlank()) {
+                Log.e("YT", "Token error when moving videos", ex)
+                return@performActionWithFreshTokens
+            }
+
+            val api = youtube()
+            val authHeader = "Bearer $accessToken"
+
+            runOnUiThread {
+                Toast.makeText(
+                    this,
+                    "Moving ${selected.size} video(s)...",
+                    Toast.LENGTH_SHORT
+                ).show()
+                btnMoveSelected.isEnabled = false
+                btnToggleSelection.isEnabled = false
+            }
+
+            fun processIndex(index: Int) {
+                if (index >= selected.size) {
+                    runOnUiThread {
+                        loadVideos()
+                        Toast.makeText(
+                            this,
+                            "Moved ${selected.size} video(s)",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        btnToggleSelection.isEnabled = true
+                    }
+                    return
+                }
+
+                val row = selected[index]
+
+                val body = PlaylistItemInsertRequest(
+                    snippet = PlaylistItemInsertSnippet(
+                        playlistId = targetPlaylistId,
+                        resourceId = ResourceIdForInsert(videoId = row.videoId)
+                    )
+                )
+
+                api.insertPlaylistItem(
+                    part = "snippet",
+                    auth = authHeader,
+                    body = body
+                ).enqueue(object : Callback<PlaylistVideoItem> {
+                    override fun onResponse(
+                        call: Call<PlaylistVideoItem>,
+                        response: Response<PlaylistVideoItem>
+                    ) {
+                        if (!response.isSuccessful) {
+                            Log.e("YT", "Insert failed ${response.code()}")
+                            processIndex(index + 1)
+                            return
+                        }
+
+                        api.deletePlaylistItem(
+                            id = row.playlistItemId,
+                            auth = authHeader
+                        ).enqueue(object : Callback<Void> {
+                            override fun onResponse(
+                                call: Call<Void>,
+                                response: Response<Void>
+                            ) {
+                                if (!response.isSuccessful) {
+                                    Log.e("YT", "Delete failed ${response.code()}")
+                                } else {
+                                    Log.d("YT", "Moved video '${row.title}'")
+                                }
+                                processIndex(index + 1)
+                            }
+
+                            override fun onFailure(call: Call<Void>, t: Throwable) {
+                                Log.e("YT", "Delete network fail", t)
+                                processIndex(index + 1)
+                            }
+                        })
+                    }
+
+                    override fun onFailure(call: Call<PlaylistVideoItem>, t: Throwable) {
+                        Log.e("YT", "Insert network fail", t)
+                        processIndex(index + 1)
+                    }
+                })
+            }
+
+            processIndex(0)
         }
     }
 
@@ -279,6 +490,8 @@ class PlaylistDetailActivity : ComponentActivity() {
     }
 }
 
+// ---------- Retrofit API and models ----------
+
 interface YouTubeDetailApi {
     @GET("youtube/v3/playlistItems")
     fun listVideos(
@@ -295,8 +508,54 @@ interface YouTubeDetailApi {
         @Query("maxResults") maxResults: Int,
         @Header("Authorization") auth: String
     ): Call<PlaylistsResponse>
+
+    @POST("youtube/v3/playlistItems")
+    fun insertPlaylistItem(
+        @Query("part") part: String,
+        @Header("Authorization") auth: String,
+        @Body body: PlaylistItemInsertRequest
+    ): Call<PlaylistVideoItem>
+
+    @DELETE("youtube/v3/playlistItems")
+    fun deletePlaylistItem(
+        @Query("id") id: String,
+        @Header("Authorization") auth: String
+    ): Call<Void>
 }
 
 data class PlaylistItemsResponse(val items: List<PlaylistVideoItem> = emptyList())
-data class PlaylistVideoItem(val snippet: VideoSnippet?)
-data class VideoSnippet(val title: String?)
+
+data class PlaylistVideoItem(
+    val id: String,               // playlistItemId
+    val snippet: VideoSnippet?
+)
+
+data class VideoSnippet(
+    val title: String?,
+    val resourceId: ResourceId?   // contains videoId
+)
+
+data class ResourceId(
+    val videoId: String?
+)
+
+data class VideoRow(
+    val playlistItemId: String,
+    val videoId: String,
+    val title: String,
+    var selected: Boolean = false
+)
+
+data class PlaylistItemInsertRequest(
+    val snippet: PlaylistItemInsertSnippet
+)
+
+data class PlaylistItemInsertSnippet(
+    val playlistId: String,
+    val resourceId: ResourceIdForInsert
+)
+
+data class ResourceIdForInsert(
+    val kind: String = "youtube#video",
+    val videoId: String
+)

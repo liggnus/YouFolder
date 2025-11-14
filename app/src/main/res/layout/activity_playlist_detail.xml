@@ -5,7 +5,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
-    <!-- Top bar with back button + title -->
+    <!-- Top bar with back button and title -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -33,7 +33,7 @@
             android:ellipsize="end" />
     </LinearLayout>
 
-    <!-- Sub-folders row -->
+    <!-- Sub folders header -->
     <TextView
         android:id="@+id/tvSubHeader"
         android:layout_width="match_parent"
@@ -60,6 +60,30 @@
         android:textSize="14sp"
         android:layout_marginTop="12dp"
         android:layout_marginBottom="4dp" />
+
+    <!-- Selection controls for videos -->
+    <LinearLayout
+        android:id="@+id/layoutVideoActions"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="4dp">
+
+        <Button
+            android:id="@+id/btnToggleSelection"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Select videos" />
+
+        <Button
+            android:id="@+id/btnMoveSelected"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Move selected"
+            android:enabled="false" />
+    </LinearLayout>
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rvVideos"
