@@ -18,6 +18,7 @@ class PlaylistsAdapter : RecyclerView.Adapter<PlaylistsAdapter.VH>() {
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
         val v: View = LayoutInflater.from(parent.context)
+            // IMPORTANT: this must match your file name row_playlists.xml
             .inflate(R.layout.row_playlist, parent, false)
         return VH(v)
     }
@@ -25,7 +26,13 @@ class PlaylistsAdapter : RecyclerView.Adapter<PlaylistsAdapter.VH>() {
     override fun onBindViewHolder(holder: VH, position: Int) {
         val item = data[position]
         holder.title.text = item.snippet.title
-        holder.count.text = item.contentDetails.itemCount.toString()
+
+        val count = item.contentDetails.itemCount
+        holder.count.text = if (count == 1) {
+            "1 video"
+        } else {
+            "$count videos"
+        }
     }
 
     override fun getItemCount(): Int = data.size

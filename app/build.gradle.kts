@@ -8,15 +8,13 @@ android {
     compileSdk = 34
 
     defaultConfig {
+        manifestPlaceholders += mapOf("appAuthRedirectScheme" to "com.googleusercontent.apps.978706435903-09c7vrppjvo0102p87o9g6p68ejvv428.apps.googleusercontent.com")
         applicationId = "com.example.youfolder"
         minSdk = 23
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        manifestPlaceholders += mapOf(
-            "appAuthRedirectScheme" to "com.googleusercontent.apps.978706435903-09c7vrppjvo0102p87o9g6p68ejvv428.apps.googleusercontent.com"
-        )
     }
 
     buildTypes {
