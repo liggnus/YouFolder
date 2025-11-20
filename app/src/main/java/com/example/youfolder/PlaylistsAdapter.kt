@@ -32,7 +32,7 @@ class PlaylistsAdapter : RecyclerView.Adapter<PlaylistsAdapter.VH>() {
 
         holder.title.text = item.snippet.title
 
-        val count = item.contentDetails.itemCount
+        val count = item.contentDetails?.itemCount ?: 0
         holder.count.text = if (count == 1) {
             "1 video"
         } else {

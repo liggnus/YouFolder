@@ -25,6 +25,7 @@ import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.POST
+import retrofit2.http.PUT
 import retrofit2.http.Query
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -74,7 +75,7 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Long press → manage (move / remove / delete)
+        // Long press → manage (move / rename / remove / delete)
         adapter.onItemLongClick = { playlist ->
             showManageDialog(playlist)
         }
@@ -141,6 +142,9 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        options += "Rename"
+        actions += { showRenameDialog(playlist) }
+
         options += "Delete from YouTube"
         actions += { showDeleteDialog(playlist) }
 
@@ -184,6 +188,140 @@ class MainActivity : ComponentActivity() {
             }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    // ---------- Rename playlist (root folder) ----------
+
+    private fun showRenameDialog(playlist: PlaylistItem) {
+        val input = EditText(this).apply {
+            setText(playlist.snippet.title)
+            setSelection(text.length)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Rename folder")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val newTitle = input.text.toString().trim()
+                if (newTitle.isEmpty()) {
+                    android.widget.Toast.makeText(
+                        this,
+                        "Name cannot be empty.",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                } else if (newTitle == playlist.snippet.title) {
+                    android.widget.Toast.makeText(
+                        this,
+                        "Name not changed.",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                } else {
+                    renamePlaylist(playlist, newTitle)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun renamePlaylist(playlist: PlaylistItem, newTitle: String) {
+        val state = authState ?: run {
+            android.widget.Toast.makeText(
+                this,
+                "Please sign in first.",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        state.performActionWithFreshTokens(authService) { accessToken, _, ex ->
+            if (ex != null) {
+                Log.e("API", "Token refresh failed (renamePlaylist)", ex)
+                runOnUiThread {
+                    android.widget.Toast.makeText(
+                        this,
+                        "Auth error: ${ex.error}",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+                return@performActionWithFreshTokens
+            }
+
+            if (accessToken.isNullOrBlank()) {
+                runOnUiThread {
+                    android.widget.Toast.makeText(
+                        this,
+                        "No access token. Please sign in again.",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+                return@performActionWithFreshTokens
+            }
+
+            val api = youtubeService()
+            val body = UpdatePlaylistRequest(
+                id = playlist.id,
+                snippet = Snippet(title = newTitle)
+            )
+
+            api.updatePlaylist(
+                part = "snippet",
+                auth = "Bearer $accessToken",
+                body = body
+            ).enqueue(object : Callback<PlaylistItem> {
+                override fun onResponse(
+                    call: Call<PlaylistItem>,
+                    response: retrofit2.Response<PlaylistItem>
+                ) {
+                    if (!response.isSuccessful) {
+                        val errorBodyString = response.errorBody()?.string() ?: "Unknown error"
+                        val errorCode = response.code()
+                        Log.e(
+                            "API",
+                            "Rename playlist HTTP $errorCode ${response.message()} — $errorBodyString"
+                        )
+                        runOnUiThread {
+                            android.widget.Toast.makeText(
+                                this@MainActivity,
+                                "Failed to rename folder ($errorCode)",
+                                android.widget.Toast.LENGTH_LONG
+                            ).show()
+                        }
+                        return
+                    }
+
+                    // ✅ Update UI immediately
+                    runOnUiThread {
+                        val updatedList = adapter.currentItems().map {
+                            if (it.id == playlist.id) it.copy(snippet = Snippet(newTitle))
+                            else it
+                        }
+                        adapter.submit(updatedList)
+
+                        android.widget.Toast.makeText(
+                            this@MainActivity,
+                            "Renamed to \"$newTitle\"",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    }
+
+                    // optional: small delayed reload from YouTube to stay in sync
+                    handler.postDelayed({
+                        loadPlaylists()
+                    }, 1000L)
+                }
+
+                override fun onFailure(call: Call<PlaylistItem>, t: Throwable) {
+                    Log.e("API", "Network failure (renamePlaylist)", t)
+                    runOnUiThread {
+                        android.widget.Toast.makeText(
+                            this@MainActivity,
+                            "Network error: ${t.localizedMessage}",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            })
+        }
     }
 
     // ---------- Create playlist ----------
@@ -495,7 +633,6 @@ class MainActivity : ComponentActivity() {
                     runOnUiThread {
                         swipeRefresh.isRefreshing = false
                         adapter.submit(roots)
-                        // You can comment this out if the toast is annoying on every resume
                         android.widget.Toast.makeText(
                             this@MainActivity,
                             "Loaded ${roots.size} playlists",
@@ -571,12 +708,27 @@ interface YouTubeApi {
         @Query("id") id: String,
         @Header("Authorization") auth: String
     ): Call<Void>
+
+    @PUT("youtube/v3/playlists")
+    fun updatePlaylist(
+        @Query("part") part: String,
+        @Header("Authorization") auth: String,
+        @Body body: UpdatePlaylistRequest
+    ): Call<PlaylistItem>
 }
 
 data class PlaylistsResponse(val items: List<PlaylistItem> = emptyList())
-data class PlaylistItem(val id: String, val snippet: Snippet, val contentDetails: ContentDetails)
+
+// 🔧 contentDetails is now optional + has default
+data class PlaylistItem(
+    val id: String,
+    val snippet: Snippet,
+    val contentDetails: ContentDetails? = null
+)
+
 data class Snippet(val title: String)
-data class ContentDetails(val itemCount: Int)
+
+data class ContentDetails(val itemCount: Int = 0)
 
 data class CreatePlaylistRequest(
     val snippet: CreatePlaylistSnippet,
@@ -590,4 +742,9 @@ data class CreatePlaylistSnippet(
 
 data class CreatePlaylistStatus(
     val privacyStatus: String
+)
+
+data class UpdatePlaylistRequest(
+    val id: String,
+    val snippet: Snippet
 )

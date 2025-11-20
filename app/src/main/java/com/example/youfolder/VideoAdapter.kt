@@ -4,8 +4,10 @@ import android.graphics.Color
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageView
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
+import com.bumptech.glide.Glide
 
 class VideoAdapter : RecyclerView.Adapter<VideoAdapter.VH>() {
 
@@ -22,7 +24,7 @@ class VideoAdapter : RecyclerView.Adapter<VideoAdapter.VH>() {
 
     var onSelectionChanged: ((List<VideoRow>) -> Unit)? = null
 
-    // new: normal click when not in selection mode
+    // normal click when not in selection mode
     var onVideoClick: ((VideoRow) -> Unit)? = null
 
     fun submit(videos: List<VideoRow>) {
@@ -35,13 +37,24 @@ class VideoAdapter : RecyclerView.Adapter<VideoAdapter.VH>() {
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
         val v = LayoutInflater.from(parent.context)
-            .inflate(android.R.layout.simple_list_item_1, parent, false)
+            .inflate(R.layout.row_video, parent, false)
         return VH(v)
     }
 
     override fun onBindViewHolder(holder: VH, position: Int) {
         val item = data[position]
-        holder.text.text = item.title
+        holder.title.text = item.title
+
+        // load thumbnail with Glide (if url is not null)
+        if (!item.thumbnailUrl.isNullOrBlank()) {
+            Glide.with(holder.itemView)
+                .load(item.thumbnailUrl)
+                .placeholder(android.R.drawable.ic_media_play)
+                .centerCrop()
+                .into(holder.thumb)
+        } else {
+            holder.thumb.setImageResource(android.R.drawable.ic_media_play)
+        }
 
         holder.itemView.setBackgroundColor(
             if (item.selected && selectionMode) {
@@ -57,7 +70,6 @@ class VideoAdapter : RecyclerView.Adapter<VideoAdapter.VH>() {
                 notifyItemChanged(position)
                 onSelectionChanged?.invoke(data.filter { it.selected })
             } else {
-                // normal click → open video
                 onVideoClick?.invoke(item)
             }
         }
@@ -76,6 +88,7 @@ class VideoAdapter : RecyclerView.Adapter<VideoAdapter.VH>() {
     override fun getItemCount(): Int = data.size
 
     class VH(v: View) : RecyclerView.ViewHolder(v) {
-        val text: TextView = v.findViewById(android.R.id.text1)
+        val thumb: ImageView = v.findViewById(R.id.ivThumbnail)
+        val title: TextView = v.findViewById(R.id.tvTitle)
     }
 }

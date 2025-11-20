@@ -4,8 +4,11 @@ import android.app.AlertDialog
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.widget.Button
+import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
@@ -26,6 +29,7 @@ import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.POST
+import retrofit2.http.PUT
 import retrofit2.http.Query
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -47,8 +51,10 @@ class PlaylistDetailActivity : ComponentActivity() {
 
     private lateinit var btnToggleSelection: Button
     private lateinit var btnMoveSelected: Button
+    private lateinit var btnAddSubfolder: ImageButton
 
     private val videoRows = mutableListOf<VideoRow>()
+    private val handler = Handler(Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -66,6 +72,9 @@ class PlaylistDetailActivity : ComponentActivity() {
 
         btnBack.setOnClickListener { finish() }
 
+        btnAddSubfolder = findViewById(R.id.btnAddSubfolder)
+        btnAddSubfolder.setOnClickListener { showCreateSubfolderDialog() }
+
         // ---- Sub-playlists list (vertical) ----
         rvSubPlaylists = findViewById(R.id.rvSubPlaylists)
         rvSubPlaylists.layoutManager = LinearLayoutManager(this)
@@ -82,7 +91,7 @@ class PlaylistDetailActivity : ComponentActivity() {
             startActivity(intent)
         }
 
-        // Long-press sub-folder → manage (move / remove)
+        // Long-press sub-folder → manage (rename / move / remove)
         subAdapter.onItemLongClick = { playlist ->
             showSubFolderMenu(playlist)
         }
@@ -92,11 +101,10 @@ class PlaylistDetailActivity : ComponentActivity() {
         rvVideos.layoutManager = LinearLayoutManager(this)
         rvVideos.adapter = videoAdapter
 
-        // new: open video when not in selection mode
+        // open video when not in selection mode
         videoAdapter.onVideoClick = { row ->
             val url = "https://www.youtube.com/watch?v=${row.videoId}"
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-            // Android will pick YouTube app if installed, otherwise browser
             startActivity(intent)
         }
 
@@ -134,6 +142,125 @@ class PlaylistDetailActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         loadSubPlaylists()
+    }
+
+    // ---------- Create sub-folder ----------
+
+    private fun showCreateSubfolderDialog() {
+        val input = EditText(this).apply {
+            hint = "Sub-folder name"
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("New sub-folder")
+            .setView(input)
+            .setPositiveButton("Create") { _, _ ->
+                val title = input.text.toString().trim()
+                if (title.isNotEmpty()) {
+                    createSubPlaylist(title)
+                } else {
+                    Toast.makeText(
+                        this,
+                        "Name cannot be empty.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun createSubPlaylist(title: String) {
+        authState.performActionWithFreshTokens(authService) { accessToken, _, ex ->
+            if (ex != null || accessToken.isNullOrBlank()) {
+                Log.e("YT", "Token error when creating subfolder", ex)
+                runOnUiThread {
+                    Toast.makeText(
+                        this,
+                        "Auth error, please try again.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                return@performActionWithFreshTokens
+            }
+
+            val api = youtube()
+            val body = CreatePlaylistRequest(
+                snippet = CreatePlaylistSnippet(title = title),
+                status = CreatePlaylistStatus(privacyStatus = "private")
+            )
+
+            api.createPlaylist(
+                part = "snippet,contentDetails,status",
+                auth = "Bearer $accessToken",
+                body = body
+            ).enqueue(object : Callback<PlaylistItem> {
+                override fun onResponse(
+                    call: Call<PlaylistItem>,
+                    response: Response<PlaylistItem>
+                ) {
+                    if (!response.isSuccessful) {
+                        Log.e(
+                            "YT",
+                            "Create subfolder HTTP ${response.code()} ${response.message()}"
+                        )
+                        runOnUiThread {
+                            Toast.makeText(
+                                this@PlaylistDetailActivity,
+                                "Failed to create sub-folder (${response.code()})",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                        return
+                    }
+
+                    val created = response.body()
+                    if (created == null) {
+                        Log.e("YT", "Create subfolder: empty body")
+                        runOnUiThread {
+                            Toast.makeText(
+                                this@PlaylistDetailActivity,
+                                "Failed to create sub-folder.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                        return
+                    }
+
+                    // Make this playlist a child of the current one
+                    folderStore.setParent(created.id, playlistId)
+
+                    // Immediately show it in the UI
+                    runOnUiThread {
+                        val updated = subAdapter.currentItems().toMutableList()
+                        updated.add(created)
+                        subAdapter.submit(updated)
+
+                        Toast.makeText(
+                            this@PlaylistDetailActivity,
+                            "Created sub-folder \"$title\"",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+
+                    // Then refresh from YouTube after a short delay
+                    handler.postDelayed({
+                        loadSubPlaylists()
+                    }, 1500L)
+                }
+
+                override fun onFailure(call: Call<PlaylistItem>, t: Throwable) {
+                    Log.e("YT", "Network error creating subfolder", t)
+                    runOnUiThread {
+                        Toast.makeText(
+                            this@PlaylistDetailActivity,
+                            "Network error: ${t.localizedMessage}",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            })
+        }
     }
 
     // ---------- Sub-folders ----------
@@ -194,6 +321,9 @@ class PlaylistDetailActivity : ComponentActivity() {
         val options = mutableListOf<String>()
         val actions = mutableListOf<() -> Unit>()
 
+        options += "Rename folder"
+        actions += { showRenameSubfolderDialog(playlist) }
+
         options += "Move into another subfolder"
         actions += { showMoveSubfolderDialog(playlist) }
 
@@ -207,6 +337,103 @@ class PlaylistDetailActivity : ComponentActivity() {
             }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    // rename subfolder = rename underlying playlist
+    private fun showRenameSubfolderDialog(playlist: PlaylistItem) {
+        val input = EditText(this).apply {
+            setText(playlist.snippet.title)
+            setSelection(text.length)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Rename folder")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val newTitle = input.text.toString().trim()
+                if (newTitle.isEmpty()) {
+                    Toast.makeText(
+                        this,
+                        "Name cannot be empty.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                } else if (newTitle == playlist.snippet.title) {
+                    Toast.makeText(
+                        this,
+                        "Name not changed.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                } else {
+                    renameSubfolder(playlist, newTitle)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun renameSubfolder(playlist: PlaylistItem, newTitle: String) {
+        authState.performActionWithFreshTokens(authService) { accessToken, _, ex ->
+            if (ex != null || accessToken.isNullOrBlank()) {
+                Log.e("YT", "Token error when renaming subfolder", ex)
+                runOnUiThread {
+                    Toast.makeText(
+                        this,
+                        "Auth error, please try again.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                return@performActionWithFreshTokens
+            }
+
+            val api = youtube()
+            val body = UpdatePlaylistRequest(
+                id = playlist.id,
+                snippet = Snippet(title = newTitle)
+            )
+
+            api.updatePlaylist(
+                part = "snippet",
+                auth = "Bearer $accessToken",
+                body = body
+            ).enqueue(object : Callback<PlaylistItem> {
+                override fun onResponse(
+                    call: Call<PlaylistItem>,
+                    response: Response<PlaylistItem>
+                ) {
+                    if (!response.isSuccessful) {
+                        Log.e("YT", "Rename subfolder HTTP ${response.code()} ${response.message()}")
+                        runOnUiThread {
+                            Toast.makeText(
+                                this@PlaylistDetailActivity,
+                                "Failed to rename folder (${response.code()})",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                        return
+                    }
+
+                    runOnUiThread {
+                        Toast.makeText(
+                            this@PlaylistDetailActivity,
+                            "Renamed to \"$newTitle\"",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        loadSubPlaylists()
+                    }
+                }
+
+                override fun onFailure(call: Call<PlaylistItem>, t: Throwable) {
+                    Log.e("YT", "Network error renaming subfolder", t)
+                    runOnUiThread {
+                        Toast.makeText(
+                            this@PlaylistDetailActivity,
+                            "Network error: ${t.localizedMessage}",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            })
+        }
     }
 
     private fun moveOutToParentFolder(child: PlaylistItem) {
@@ -251,7 +478,7 @@ class PlaylistDetailActivity : ComponentActivity() {
             .show()
     }
 
-    // ---------- Videos ----------
+    // ---------- Videos (with thumbnails + pagination, no 50-limit) ----------
 
     private fun loadVideos() {
         authState.performActionWithFreshTokens(authService) { accessToken, _, ex ->
@@ -266,46 +493,74 @@ class PlaylistDetailActivity : ComponentActivity() {
             }
 
             val api = youtube()
-            api.listVideos(
-                part = "snippet",
-                playlistId = playlistId,
-                maxResults = 50,
-                auth = "Bearer $accessToken"
-            ).enqueue(object : Callback<PlaylistItemsResponse> {
-                override fun onResponse(
-                    call: Call<PlaylistItemsResponse>,
-                    response: Response<PlaylistItemsResponse>
-                ) {
-                    if (!response.isSuccessful) {
-                        Log.e("YT", "Error loading videos ${response.code()}")
-                        return
-                    }
+            val authHeader = "Bearer $accessToken"
+            val accumulated = mutableListOf<VideoRow>()
 
-                    val rows = response.body()?.items
-                        ?.mapNotNull { item ->
-                            val title = item.snippet?.title ?: return@mapNotNull null
-                            val vid = item.snippet.resourceId?.videoId ?: return@mapNotNull null
+            fun fetchPage(pageToken: String?) {
+                api.listVideos(
+                    part = "snippet",
+                    playlistId = playlistId,
+                    maxResults = 50,
+                    pageToken = pageToken,
+                    auth = authHeader
+                ).enqueue(object : Callback<PlaylistItemsResponse> {
+                    override fun onResponse(
+                        call: Call<PlaylistItemsResponse>,
+                        response: Response<PlaylistItemsResponse>
+                    ) {
+                        if (!response.isSuccessful) {
+                            Log.e("YT", "Error loading videos ${response.code()}")
+                            return
+                        }
+
+                        val body = response.body()
+                        val items = body?.items.orEmpty()
+
+                        val rows = items.mapNotNull { item ->
+                            val snippet = item.snippet ?: return@mapNotNull null
+                            val title = snippet.title ?: return@mapNotNull null
+                            val vid = snippet.resourceId?.videoId ?: return@mapNotNull null
+
+                            val thumbUrl =
+                                snippet.thumbnails?.medium?.url
+                                    ?: snippet.thumbnails?.default?.url
+                                    ?: snippet.thumbnails?.high?.url
+
                             VideoRow(
                                 playlistItemId = item.id,
                                 videoId = vid,
-                                title = title
+                                title = title,
+                                thumbnailUrl = thumbUrl
                             )
-                        }.orEmpty()
+                        }
 
-                    runOnUiThread {
-                        videoRows.clear()
-                        videoRows.addAll(rows)
-                        videoAdapter.selectionMode = false
-                        btnToggleSelection.text = "Select videos"
-                        btnMoveSelected.isEnabled = false
-                        videoAdapter.submit(videoRows)
+                        accumulated.addAll(rows)
+
+                        val next = body?.nextPageToken
+                        if (next != null) {
+                            fetchPage(next)
+                        } else {
+                            // final UI update with ALL videos
+                            runOnUiThread {
+                                videoRows.clear()
+                                videoRows.addAll(accumulated)
+                                videoAdapter.selectionMode = false
+                                btnToggleSelection.text = "Select videos"
+                                btnMoveSelected.isEnabled = false
+                                videoAdapter.submit(videoRows)
+                                Log.d("YT", "Loaded ${accumulated.size} videos in total")
+                            }
+                        }
                     }
-                }
 
-                override fun onFailure(call: Call<PlaylistItemsResponse>, t: Throwable) {
-                    Log.e("YT", "network fail", t)
-                }
-            })
+                    override fun onFailure(call: Call<PlaylistItemsResponse>, t: Throwable) {
+                        Log.e("YT", "network fail", t)
+                    }
+                })
+            }
+
+            // start with first page
+            fetchPage(null)
         }
     }
 
@@ -498,6 +753,7 @@ interface YouTubeDetailApi {
         @Query("part") part: String,
         @Query("playlistId") playlistId: String,
         @Query("maxResults") maxResults: Int,
+        @Query("pageToken") pageToken: String? = null,
         @Header("Authorization") auth: String
     ): Call<PlaylistItemsResponse>
 
@@ -521,9 +777,26 @@ interface YouTubeDetailApi {
         @Query("id") id: String,
         @Header("Authorization") auth: String
     ): Call<Void>
+
+    @POST("youtube/v3/playlists")
+    fun createPlaylist(
+        @Query("part") part: String,
+        @Header("Authorization") auth: String,
+        @Body body: CreatePlaylistRequest
+    ): Call<PlaylistItem>
+
+    @PUT("youtube/v3/playlists")
+    fun updatePlaylist(
+        @Query("part") part: String,
+        @Header("Authorization") auth: String,
+        @Body body: UpdatePlaylistRequest
+    ): Call<PlaylistItem>
 }
 
-data class PlaylistItemsResponse(val items: List<PlaylistVideoItem> = emptyList())
+data class PlaylistItemsResponse(
+    val items: List<PlaylistVideoItem> = emptyList(),
+    val nextPageToken: String? = null
+)
 
 data class PlaylistVideoItem(
     val id: String,               // playlistItemId
@@ -532,7 +805,18 @@ data class PlaylistVideoItem(
 
 data class VideoSnippet(
     val title: String?,
-    val resourceId: ResourceId?   // contains videoId
+    val resourceId: ResourceId?,
+    val thumbnails: Thumbnails?
+)
+
+data class Thumbnails(
+    val default: ThumbnailDetails?,
+    val medium: ThumbnailDetails?,
+    val high: ThumbnailDetails?
+)
+
+data class ThumbnailDetails(
+    val url: String?
 )
 
 data class ResourceId(
@@ -543,6 +827,7 @@ data class VideoRow(
     val playlistItemId: String,
     val videoId: String,
     val title: String,
+    val thumbnailUrl: String? = null,
     var selected: Boolean = false
 )
 
