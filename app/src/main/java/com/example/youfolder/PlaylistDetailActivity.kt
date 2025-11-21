@@ -33,6 +33,9 @@ import retrofit2.http.PUT
 import retrofit2.http.Query
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import com.google.android.gms.ads.AdRequest
+import com.google.android.gms.ads.AdView
+import com.google.android.gms.ads.MobileAds
 
 class PlaylistDetailActivity : ComponentActivity() {
 
@@ -56,9 +59,16 @@ class PlaylistDetailActivity : ComponentActivity() {
     private val videoRows = mutableListOf<VideoRow>()
     private val handler = Handler(Looper.getMainLooper())
 
+    private lateinit var adView: AdView
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_playlist_detail)
+
+        MobileAds.initialize(this) {}
+        adView = findViewById(R.id.adView)
+        val adRequest = AdRequest.Builder().build()
+        adView.loadAd(adRequest)
 
         folderStore = FolderStore(this)
 

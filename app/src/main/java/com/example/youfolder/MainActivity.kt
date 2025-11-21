@@ -29,6 +29,9 @@ import retrofit2.http.PUT
 import retrofit2.http.Query
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import com.google.android.gms.ads.AdRequest
+import com.google.android.gms.ads.AdView
+import com.google.android.gms.ads.MobileAds
 
 class MainActivity : ComponentActivity() {
 
@@ -43,9 +46,23 @@ class MainActivity : ComponentActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var folderStore: FolderStore
 
+    private lateinit var adView: AdView
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        // ⭐ Initialize Mobile Ads and load the test banner
+        MobileAds.initialize(this) {}
+        adView = findViewById(R.id.adView)
+        val adRequest = AdRequest.Builder().build()
+        adView.loadAd(adRequest)
+
+        folderStore = FolderStore(this)
+
+        swipeRefresh = findViewById(R.id.swipeRefresh)
+        rv = findViewById(R.id.rvPlaylists)
+        btnAdd = findViewById(R.id.btnAddPlaylist)
 
         folderStore = FolderStore(this)
 
