@@ -42,11 +42,11 @@ class LoginActivity : ComponentActivity() {
                     if (tokenResp != null) {
                         authState?.update(tokenResp, tokenEx)
 
-                        val json = authState!!.jsonSerializeString()
-                        startActivity(
-                            Intent(this, MainActivity::class.java)
-                                .putExtra("authStateJson", json)
-                        )
+                        val state = authState!!
+                        // 🔹 save for future launches
+                        AuthPrefs.save(this, state)
+                        // 🔹 go into main app
+                        goToMain(state)
                         finish()
                     } else {
                         Log.e("AUTH", "Token exchange failed", tokenEx)
@@ -60,6 +60,14 @@ class LoginActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_login)
+
+        // 🔹 Check if we already have a saved/authorized state
+        val existing = AuthPrefs.read(this)
+        if (existing != null && existing.isAuthorized) {
+            goToMain(existing)
+            finish()
+            return
+        }
 
         val btn: Button = findViewById(R.id.btnLoginYouTube)
         btn.setOnClickListener { startGoogleLogin() }
@@ -79,7 +87,7 @@ class LoginActivity : ComponentActivity() {
                     "openid",
                     "email",
                     "profile",
-                    // 🔹 this scope lets us CREATE / EDIT playlists
+                    // scope to manage YouTube playlists
                     "https://www.googleapis.com/auth/youtube"
                 )
                 .build()
@@ -90,6 +98,14 @@ class LoginActivity : ComponentActivity() {
             val intent = authService.getAuthorizationRequestIntent(request)
             authLauncher.launch(intent)
         }
+    }
+
+    private fun goToMain(state: AuthState) {
+        val json = state.jsonSerializeString()
+        startActivity(
+            Intent(this, MainActivity::class.java)
+                .putExtra("authStateJson", json)
+        )
     }
 
     override fun onDestroy() {

@@ -17,6 +17,7 @@ class VideoAdapter : RecyclerView.Adapter<VideoAdapter.VH>() {
         set(value) {
             field = value
             if (!value) {
+                // leaving selection mode → clear selection
                 data.forEach { it.selected = false }
             }
             notifyDataSetChanged()
@@ -27,6 +28,9 @@ class VideoAdapter : RecyclerView.Adapter<VideoAdapter.VH>() {
     // normal click when not in selection mode
     var onVideoClick: ((VideoRow) -> Unit)? = null
 
+    // per-row delete icon click
+    var onDeleteClick: ((VideoRow) -> Unit)? = null
+
     fun submit(videos: List<VideoRow>) {
         data.clear()
         data.addAll(videos)
@@ -34,6 +38,9 @@ class VideoAdapter : RecyclerView.Adapter<VideoAdapter.VH>() {
     }
 
     fun currentItems(): List<VideoRow> = data.toList()
+
+    // optional helper if you ever want it
+    fun getSelectedVideos(): List<VideoRow> = data.filter { it.selected }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
         val v = LayoutInflater.from(parent.context)
@@ -56,6 +63,7 @@ class VideoAdapter : RecyclerView.Adapter<VideoAdapter.VH>() {
             holder.thumb.setImageResource(android.R.drawable.ic_media_play)
         }
 
+        // background highlight when selected
         holder.itemView.setBackgroundColor(
             if (item.selected && selectionMode) {
                 0xFFE0E0E0.toInt()
@@ -64,6 +72,7 @@ class VideoAdapter : RecyclerView.Adapter<VideoAdapter.VH>() {
             }
         )
 
+        // row tap
         holder.itemView.setOnClickListener {
             if (selectionMode) {
                 item.selected = !item.selected
@@ -74,6 +83,7 @@ class VideoAdapter : RecyclerView.Adapter<VideoAdapter.VH>() {
             }
         }
 
+        // long press to enter selection mode and select this item
         holder.itemView.setOnLongClickListener {
             if (!selectionMode) {
                 selectionMode = true
@@ -83,6 +93,19 @@ class VideoAdapter : RecyclerView.Adapter<VideoAdapter.VH>() {
             }
             true
         }
+
+        // per-row delete button
+        holder.deleteButton?.apply {
+            // hide delete icon while in selection mode (user will use DELETE SELECTED instead)
+            visibility = if (selectionMode) View.GONE else View.VISIBLE
+
+            setOnClickListener {
+                // only handle when not in selection mode
+                if (!selectionMode) {
+                    onDeleteClick?.invoke(item)
+                }
+            }
+        }
     }
 
     override fun getItemCount(): Int = data.size
@@ -90,5 +113,7 @@ class VideoAdapter : RecyclerView.Adapter<VideoAdapter.VH>() {
     class VH(v: View) : RecyclerView.ViewHolder(v) {
         val thumb: ImageView = v.findViewById(R.id.ivThumbnail)
         val title: TextView = v.findViewById(R.id.tvTitle)
+        // use View? so it works whether it's an ImageButton, ImageView, etc.
+        val deleteButton: View? = v.findViewById(R.id.btnDeleteVideo)
     }
 }

@@ -54,6 +54,7 @@ class PlaylistDetailActivity : ComponentActivity() {
 
     private lateinit var btnToggleSelection: Button
     private lateinit var btnMoveSelected: Button
+    private lateinit var btnDeleteSelected: Button
     private lateinit var btnAddSubfolder: ImageButton
 
     private val videoRows = mutableListOf<VideoRow>()
@@ -65,6 +66,7 @@ class PlaylistDetailActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_playlist_detail)
 
+        // ---- Ads ----
         MobileAds.initialize(this) {}
         adView = findViewById(R.id.adView)
         val adRequest = AdRequest.Builder().build()
@@ -118,18 +120,41 @@ class PlaylistDetailActivity : ComponentActivity() {
             startActivity(intent)
         }
 
+        videoAdapter.onDeleteClick = { row ->
+            AlertDialog.Builder(this)
+                .setTitle("Delete video")
+                .setMessage("Remove \"${row.title}\" from this playlist?")
+                .setPositiveButton("Delete") { _, _ ->
+                    // reuse the bulk-delete logic with a single-item list
+                    deleteSelectedVideos(listOf(row))
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
+
         btnToggleSelection = findViewById(R.id.btnToggleSelection)
         btnMoveSelected = findViewById(R.id.btnMoveSelected)
+        btnDeleteSelected = findViewById(R.id.btnDeleteVideo)
+
+        // start with move/delete disabled
+        btnMoveSelected.isEnabled = false
+        btnDeleteSelected.isEnabled = false
 
         btnToggleSelection.setOnClickListener {
             videoAdapter.selectionMode = !videoAdapter.selectionMode
             btnToggleSelection.text =
                 if (videoAdapter.selectionMode) "Cancel selection" else "Select videos"
+
+            // whenever we toggle selection mode, reset buttons
             btnMoveSelected.isEnabled = false
+            btnDeleteSelected.isEnabled = false
         }
 
+        // when adapter selection changes, enable/disable both buttons
         videoAdapter.onSelectionChanged = { selected ->
-            btnMoveSelected.isEnabled = selected.isNotEmpty()
+            val hasSelection = selected.isNotEmpty()
+            btnMoveSelected.isEnabled = hasSelection
+            btnDeleteSelected.isEnabled = hasSelection
         }
 
         btnMoveSelected.setOnClickListener {
@@ -139,6 +164,10 @@ class PlaylistDetailActivity : ComponentActivity() {
             } else {
                 showMoveVideosDialog(selected)
             }
+        }
+
+        btnDeleteSelected.setOnClickListener {
+            onDeleteSelectedClicked()
         }
 
         val json = intent.getStringExtra("authStateJson") ?: ""
@@ -340,6 +369,9 @@ class PlaylistDetailActivity : ComponentActivity() {
         options += "Remove from this folder"
         actions += { moveOutToParentFolder(playlist) }
 
+        options += "Delete folder"
+        actions += { confirmDeleteSubfolder(playlist) }
+
         AlertDialog.Builder(this)
             .setTitle(playlist.snippet.title)
             .setItems(options.toTypedArray()) { _, which ->
@@ -411,7 +443,10 @@ class PlaylistDetailActivity : ComponentActivity() {
                     response: Response<PlaylistItem>
                 ) {
                     if (!response.isSuccessful) {
-                        Log.e("YT", "Rename subfolder HTTP ${response.code()} ${response.message()}")
+                        Log.e(
+                            "YT",
+                            "Rename subfolder HTTP ${response.code()} ${response.message()}"
+                        )
                         runOnUiThread {
                             Toast.makeText(
                                 this@PlaylistDetailActivity,
@@ -488,6 +523,78 @@ class PlaylistDetailActivity : ComponentActivity() {
             .show()
     }
 
+    private fun confirmDeleteSubfolder(playlist: PlaylistItem) {
+        AlertDialog.Builder(this)
+            .setTitle("Delete folder")
+            .setMessage("Delete folder \"${playlist.snippet.title}\" and its playlist on YouTube? This cannot be undone.")
+            .setPositiveButton("Delete") { _, _ ->
+                deleteSubfolder(playlist)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun deleteSubfolder(playlist: PlaylistItem) {
+        authState.performActionWithFreshTokens(authService) { accessToken, _, ex ->
+            if (ex != null || accessToken.isNullOrBlank()) {
+                Log.e("YT", "Token error when deleting subfolder", ex)
+                runOnUiThread {
+                    Toast.makeText(
+                        this,
+                        "Auth error, please try again.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                return@performActionWithFreshTokens
+            }
+
+            val api = youtube()
+            val authHeader = "Bearer $accessToken"
+
+            api.deletePlaylist(
+                id = playlist.id,
+                auth = authHeader
+            ).enqueue(object : Callback<Void> {
+                override fun onResponse(call: Call<Void>, response: Response<Void>) {
+                    if (!response.isSuccessful) {
+                        Log.e("YT", "Delete playlist failed ${response.code()} ${response.message()}")
+                        runOnUiThread {
+                            Toast.makeText(
+                                this@PlaylistDetailActivity,
+                                "Failed to delete folder (${response.code()})",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                        return
+                    }
+
+                    // (Optional) if you ever add a method on FolderStore to clean up:
+                    // folderStore.remove(playlist.id)
+
+                    runOnUiThread {
+                        Toast.makeText(
+                            this@PlaylistDetailActivity,
+                            "Deleted folder \"${playlist.snippet.title}\"",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        loadSubPlaylists()   // refresh list so it disappears
+                    }
+                }
+
+                override fun onFailure(call: Call<Void>, t: Throwable) {
+                    Log.e("YT", "Network error deleting subfolder", t)
+                    runOnUiThread {
+                        Toast.makeText(
+                            this@PlaylistDetailActivity,
+                            "Network error: ${t.localizedMessage}",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            })
+        }
+    }
+
     // ---------- Videos (with thumbnails + pagination, no 50-limit) ----------
 
     private fun loadVideos() {
@@ -557,6 +664,7 @@ class PlaylistDetailActivity : ComponentActivity() {
                                 videoAdapter.selectionMode = false
                                 btnToggleSelection.text = "Select videos"
                                 btnMoveSelected.isEnabled = false
+                                btnDeleteSelected.isEnabled = false
                                 videoAdapter.submit(videoRows)
                                 Log.d("YT", "Loaded ${accumulated.size} videos in total")
                             }
@@ -572,6 +680,25 @@ class PlaylistDetailActivity : ComponentActivity() {
             // start with first page
             fetchPage(null)
         }
+    }
+
+    private fun onDeleteSelectedClicked() {
+        // use the same selection logic as move
+        val selectedVideos = videoAdapter.currentItems().filter { it.selected }
+
+        if (selectedVideos.isEmpty()) {
+            Toast.makeText(this, "No videos selected.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Delete selected videos")
+            .setMessage("Remove ${selectedVideos.size} video(s) from this playlist?")
+            .setPositiveButton("Delete") { _, _ ->
+                deleteSelectedVideos(selectedVideos)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun showMoveVideosDialog(selected: List<VideoRow>) {
@@ -635,6 +762,75 @@ class PlaylistDetailActivity : ComponentActivity() {
     }
 
     /**
+     * Delete all selected videos from this playlist (YouTube playlistItems API).
+     */
+    private fun deleteSelectedVideos(selected: List<VideoRow>) {
+        if (selected.isEmpty()) return
+
+        authState.performActionWithFreshTokens(authService) { accessToken, _, ex ->
+            if (ex != null || accessToken.isNullOrBlank()) {
+                Log.e("YT", "Token error when deleting videos", ex)
+                return@performActionWithFreshTokens
+            }
+
+            val api = youtube()
+            val authHeader = "Bearer $accessToken"
+
+            runOnUiThread {
+                Toast.makeText(
+                    this,
+                    "Deleting ${selected.size} video(s)...",
+                    Toast.LENGTH_SHORT
+                ).show()
+                btnMoveSelected.isEnabled = false
+                btnDeleteSelected.isEnabled = false
+                btnToggleSelection.isEnabled = false
+            }
+
+            fun processIndex(index: Int) {
+                if (index >= selected.size) {
+                    runOnUiThread {
+                        loadVideos()
+                        Toast.makeText(
+                            this,
+                            "Deleted ${selected.size} video(s)",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        btnToggleSelection.isEnabled = true
+                    }
+                    return
+                }
+
+                val row = selected[index]
+
+                api.deletePlaylistItem(
+                    id = row.playlistItemId,
+                    auth = authHeader
+                ).enqueue(object : Callback<Void> {
+                    override fun onResponse(
+                        call: Call<Void>,
+                        response: Response<Void>
+                    ) {
+                        if (!response.isSuccessful) {
+                            Log.e("YT", "Delete failed ${response.code()}")
+                        } else {
+                            Log.d("YT", "Deleted video '${row.title}'")
+                        }
+                        processIndex(index + 1)
+                    }
+
+                    override fun onFailure(call: Call<Void>, t: Throwable) {
+                        Log.e("YT", "Delete network fail", t)
+                        processIndex(index + 1)
+                    }
+                })
+            }
+
+            processIndex(0)
+        }
+    }
+
+    /**
      * Move all selected videos to target playlist in sequence:
      * insert then delete then next.
      */
@@ -658,6 +854,7 @@ class PlaylistDetailActivity : ComponentActivity() {
                 ).show()
                 btnMoveSelected.isEnabled = false
                 btnToggleSelection.isEnabled = false
+                btnDeleteSelected.isEnabled = false
             }
 
             fun processIndex(index: Int) {
@@ -794,6 +991,12 @@ interface YouTubeDetailApi {
         @Header("Authorization") auth: String,
         @Body body: CreatePlaylistRequest
     ): Call<PlaylistItem>
+
+    @DELETE("youtube/v3/playlists")
+    fun deletePlaylist(
+        @Query("id") id: String,
+        @Header("Authorization") auth: String
+    ): Call<Void>
 
     @PUT("youtube/v3/playlists")
     fun updatePlaylist(
