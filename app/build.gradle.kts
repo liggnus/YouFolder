@@ -8,15 +8,13 @@ android {
     compileSdk = 34
 
     defaultConfig {
+        manifestPlaceholders += mapOf("appAuthRedirectScheme" to "com.googleusercontent.apps.978706435903-09c7vrppjvo0102p87o9g6p68ejvv428.apps.googleusercontent.com")
         applicationId = "com.example.youfolder"
         minSdk = 23
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        manifestPlaceholders += mapOf(
-            "appAuthRedirectScheme" to "com.googleusercontent.apps.978706435903-09c7vrppjvo0102p87o9g6p68ejvv428.apps.googleusercontent.com"
-        )
     }
 
     buildTypes {
@@ -62,4 +60,12 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+
+    implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
+
+    implementation("com.github.bumptech.glide:glide:4.16.0")
+
+    implementation("com.google.android.material:material:1.12.0")
+
+    implementation("com.google.android.gms:play-services-ads:23.0.0")
 }
