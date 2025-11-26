@@ -13,6 +13,10 @@ class VideoAdapter : RecyclerView.Adapter<VideoAdapter.VH>() {
 
     private val data = mutableListOf<VideoRow>()
 
+    /**
+     * When true, rows can be selected (long-press to enter).
+     * Activity listens via onSelectionModeChanged to show/hide the bar.
+     */
     var selectionMode: Boolean = false
         set(value) {
             field = value
@@ -21,14 +25,23 @@ class VideoAdapter : RecyclerView.Adapter<VideoAdapter.VH>() {
                 data.forEach { it.selected = false }
             }
             notifyDataSetChanged()
+            onSelectionModeChanged?.invoke(value)
         }
 
+    /** Called when selection mode is toggled on/off */
+    var onSelectionModeChanged: ((Boolean) -> Unit)? = null
+
+    /** Called whenever the set of selected videos changes */
     var onSelectionChanged: ((List<VideoRow>) -> Unit)? = null
 
-    // normal click when not in selection mode
+    /** Normal click (when NOT in selection mode) → open YouTube */
     var onVideoClick: ((VideoRow) -> Unit)? = null
 
-    // per-row delete icon click
+    /**
+     * Optional per-row delete callback (used only if you add a delete icon
+     * back into the row layout). Right now we don’t have that view,
+     * so this will never be called.
+     */
     var onDeleteClick: ((VideoRow) -> Unit)? = null
 
     fun submit(videos: List<VideoRow>) {
@@ -39,7 +52,6 @@ class VideoAdapter : RecyclerView.Adapter<VideoAdapter.VH>() {
 
     fun currentItems(): List<VideoRow> = data.toList()
 
-    // optional helper if you ever want it
     fun getSelectedVideos(): List<VideoRow> = data.filter { it.selected }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
@@ -63,27 +75,29 @@ class VideoAdapter : RecyclerView.Adapter<VideoAdapter.VH>() {
             holder.thumb.setImageResource(android.R.drawable.ic_media_play)
         }
 
-        // background highlight when selected
+        // background highlight when selected in selection mode
         holder.itemView.setBackgroundColor(
             if (item.selected && selectionMode) {
-                0xFFE0E0E0.toInt()
+                0xFFE0E0E0.toInt()        // light gray
             } else {
                 Color.TRANSPARENT
             }
         )
 
-        // row tap
+        // normal tap
         holder.itemView.setOnClickListener {
             if (selectionMode) {
+                // toggle this row's selection
                 item.selected = !item.selected
                 notifyItemChanged(position)
                 onSelectionChanged?.invoke(data.filter { it.selected })
             } else {
+                // open on YouTube
                 onVideoClick?.invoke(item)
             }
         }
 
-        // long press to enter selection mode and select this item
+        // long press → enter selection mode if not already
         holder.itemView.setOnLongClickListener {
             if (!selectionMode) {
                 selectionMode = true
@@ -94,13 +108,11 @@ class VideoAdapter : RecyclerView.Adapter<VideoAdapter.VH>() {
             true
         }
 
-        // per-row delete button
+        // We *currently* don't have a delete icon in the row layout,
+        // so deleteButton is always null and this does nothing.
         holder.deleteButton?.apply {
-            // hide delete icon while in selection mode (user will use DELETE SELECTED instead)
             visibility = if (selectionMode) View.GONE else View.VISIBLE
-
             setOnClickListener {
-                // only handle when not in selection mode
                 if (!selectionMode) {
                     onDeleteClick?.invoke(item)
                 }
@@ -113,7 +125,9 @@ class VideoAdapter : RecyclerView.Adapter<VideoAdapter.VH>() {
     class VH(v: View) : RecyclerView.ViewHolder(v) {
         val thumb: ImageView = v.findViewById(R.id.ivThumbnail)
         val title: TextView = v.findViewById(R.id.tvTitle)
-        // use View? so it works whether it's an ImageButton, ImageView, etc.
-        val deleteButton: View? = v.findViewById(R.id.btnDeleteVideo)
+        // no btnDeleteVideo in layout right now → keep this null
+        val deleteButton: View? = null
+        // If you later add a delete icon back, change this to:
+        // val deleteButton: View? = v.findViewById(R.id.btnDeleteVideo)
     }
 }

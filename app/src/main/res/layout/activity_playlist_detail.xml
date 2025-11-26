@@ -4,7 +4,8 @@
     android:orientation="vertical"
     android:padding="16dp"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="@android:color/white">
 
     <!-- Top bar with back button and title -->
     <LinearLayout
@@ -61,11 +62,47 @@
             android:src="@android:drawable/ic_input_add" />
     </LinearLayout>
 
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/rvSubPlaylists"
+    <!-- 🔹 Folder selection bar (shown when long-press selecting subfolders) -->
+    <LinearLayout
+        android:id="@+id/layoutFolderSelectionBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:overScrollMode="never" />
+        android:orientation="horizontal"
+        android:padding="8dp"
+        android:background="#EEEEEE"
+        android:visibility="gone">
+
+        <Button
+            android:id="@+id/btnMoveFolders"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="MOVE FOLDERS"
+            android:enabled="false" />
+
+        <Button
+            android:id="@+id/btnDeleteFolders"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="DELETE FOLDERS"
+            android:enabled="false" />
+
+        <Button
+            android:id="@+id/btnCancelFolderSelection"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Cancel" />
+    </LinearLayout>
+
+    <!-- Sub-folder list -->
+    <com.simplecityapps.recyclerview_fastscroll.views.FastScrollRecyclerView
+        android:id="@+id/rvSubPlaylists"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:overScrollMode="never"
+        android:scrollbars="none" />
 
     <!-- Videos header -->
     <TextView
@@ -80,42 +117,45 @@
 
     <!-- Selection controls for videos -->
     <LinearLayout
-        android:id="@+id/layoutVideoActions"
+        android:id="@+id/layoutVideoSelectionBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:layout_marginBottom="4dp"
-        android:baselineAligned="false">
-
-        <Button
-            android:id="@+id/btnToggleSelection"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Select videos" />
+        android:gravity="center"
+        android:padding="8dp"
+        android:visibility="gone">
 
         <Button
             android:id="@+id/btnMoveSelected"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="Move selected"
-            android:enabled="false" />
+            android:text="MOVE VIDEOS" />
 
         <Button
-            android:id="@+id/btnDeleteVideo"
+            android:id="@+id/btnDeleteSelected"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
             android:layout_weight="1"
-            android:text="DELETE SELECTED" />
+            android:text="DELETE VIDEOS" />
+
+        <Button
+            android:id="@+id/btnCancelVideoSelection"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_weight="1"
+            android:text="CANCEL" />
     </LinearLayout>
 
     <!-- Videos list takes remaining space above the ad -->
-    <androidx.recyclerview.widget.RecyclerView
+    <com.simplecityapps.recyclerview_fastscroll.views.FastScrollRecyclerView
         android:id="@+id/rvVideos"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_weight="2"
+        android:scrollbars="none" />
 
     <!-- Bottom banner ad -->
     <com.google.android.gms.ads.AdView

@@ -6,9 +6,12 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.View
+import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageButton
 import androidx.activity.ComponentActivity
+import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
@@ -38,10 +41,15 @@ class MainActivity : ComponentActivity() {
     private val authService by lazy { AuthorizationService(this) }
     private var authState: AuthState? = null
 
-    private lateinit var rv: RecyclerView
+    private lateinit var rv: com.simplecityapps.recyclerview_fastscroll.views.FastScrollRecyclerView
     private lateinit var swipeRefresh: SwipeRefreshLayout
     private lateinit var btnAdd: ImageButton
     private val adapter = PlaylistsAdapter()
+
+    private lateinit var layoutSelectionBar: View
+    private lateinit var btnMoveSelected: Button
+    private lateinit var btnDeleteSelected: Button
+    private lateinit var btnCancelSelection: Button
 
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var folderStore: FolderStore
@@ -52,11 +60,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // ⭐ Initialize Mobile Ads and load the test banner
+        // ADS
         MobileAds.initialize(this) {}
         adView = findViewById(R.id.adView)
-        val adRequest = AdRequest.Builder().build()
-        adView.loadAd(adRequest)
+        adView.loadAd(AdRequest.Builder().build())
 
         folderStore = FolderStore(this)
 
@@ -64,16 +71,58 @@ class MainActivity : ComponentActivity() {
         rv = findViewById(R.id.rvPlaylists)
         btnAdd = findViewById(R.id.btnAddPlaylist)
 
-        folderStore = FolderStore(this)
+        layoutSelectionBar = findViewById(R.id.layoutSelectionBar)
+        btnMoveSelected = findViewById(R.id.btnMoveSelected)
+        btnDeleteSelected = findViewById(R.id.btnDeleteSelected)
+        btnCancelSelection = findViewById(R.id.btnCancelSelection)
 
-        swipeRefresh = findViewById(R.id.swipeRefresh)
-        rv = findViewById(R.id.rvPlaylists)
-        btnAdd = findViewById(R.id.btnAddPlaylist)
+        btnCancelSelection.setOnClickListener {
+            adapter.setSelectionMode(false)   // exits press-and-hold mode
+        }
 
         rv.layoutManager = LinearLayoutManager(this)
         rv.adapter = adapter
 
-        // Tap → open playlist detail (videos + sub-folders)
+        // --- Drag-to-reorder setup for root playlists ---
+        val dragCallback = object : ItemTouchHelper.SimpleCallback(
+            ItemTouchHelper.UP or ItemTouchHelper.DOWN,
+            0
+        ) {
+            override fun onMove(
+                recyclerView: RecyclerView,
+                viewHolder: RecyclerView.ViewHolder,
+                target: RecyclerView.ViewHolder
+            ): Boolean {
+                val fromPos = viewHolder.bindingAdapterPosition
+                val toPos = target.bindingAdapterPosition
+
+                adapter.moveItem(fromPos, toPos)
+
+                // 🔐 Persist new root order in FolderStore
+                val newOrderIds = adapter.currentItems().map { it.id }
+                folderStore.setRootOrder(newOrderIds)
+
+                return true
+            }
+
+            override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
+                // no swipe
+            }
+
+            override fun isLongPressDragEnabled(): Boolean = false
+        }
+
+        val itemTouchHelper = ItemTouchHelper(dragCallback)
+        itemTouchHelper.attachToRecyclerView(rv)
+
+        // adapter will tell us when to start drag (via drag handle)
+        adapter.onStartDrag = { vh ->
+            itemTouchHelper.startDrag(vh)
+        }
+
+        // === ADAPTER CALLBACKS ===
+
+        // Open playlist (normal mode)
         adapter.onItemClick = { playlist ->
             val state = authState
             if (state == null) {
@@ -92,15 +141,39 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Long press → manage (move / rename / remove / delete)
-        adapter.onItemLongClick = { playlist ->
+        // Three-dot menu for single-item actions
+        adapter.onMenuClick = { playlist ->
             showManageDialog(playlist)
         }
 
-        // Pull-to-refresh → reload playlists
-        swipeRefresh.setOnRefreshListener {
-            loadPlaylists()
+        // When selection mode toggles on/off
+        adapter.onSelectionModeChanged = { enabled ->
+            layoutSelectionBar.visibility = if (enabled) View.VISIBLE else View.GONE
+            btnMoveSelected.isEnabled = false
+            btnDeleteSelected.isEnabled = false
         }
+
+        // When selection changes
+        adapter.onSelectionChanged = { selected ->
+            val has = selected.isNotEmpty()
+            btnMoveSelected.isEnabled = has
+            btnDeleteSelected.isEnabled = has
+        }
+
+        // === SELECTION BAR BUTTONS ===
+
+        btnMoveSelected.setOnClickListener {
+            val selected = adapter.selectedItems()
+            if (selected.isNotEmpty()) showMoveSelectedDialog(selected)
+        }
+
+        btnDeleteSelected.setOnClickListener {
+            val selected = adapter.selectedItems()
+            if (selected.isNotEmpty()) showDeleteSelectedDialog(selected)
+        }
+
+        // Pull-to-refresh
+        swipeRefresh.setOnRefreshListener { loadPlaylists() }
 
         // Restore AuthState that LoginActivity passed in
         val authJson = intent.getStringExtra("authStateJson")
@@ -130,14 +203,59 @@ class MainActivity : ComponentActivity() {
         btnAdd.setOnClickListener { showCreatePlaylistDialog() }
     }
 
-    // 🔁 Whenever we return to this screen, reload structure from FolderStore
+    // 🔁 Whenever we return to this screen, reload playlists
     override fun onResume() {
         super.onResume()
-        // Do not show spinner here, just quietly refresh
         loadPlaylists()
     }
 
-    // ---------- Manage menu ----------
+    // === Multi-delete dialog ===
+    private fun showDeleteSelectedDialog(selected: List<PlaylistItem>) {
+        AlertDialog.Builder(this)
+            .setTitle("Delete ${selected.size} playlists?")
+            .setMessage("This removes them from YouTube permanently.")
+            .setPositiveButton("Delete") { _, _ ->
+                selected.forEach { deletePlaylist(it) }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // === Multi-move dialog ===
+    private fun showMoveSelectedDialog(selected: List<PlaylistItem>) {
+        val all = adapter.currentItems()
+        val candidates = all.filter { p -> selected.none { it.id == p.id } }
+
+        if (candidates.isEmpty()) {
+            android.widget.Toast.makeText(
+                this,
+                "No folder to move into",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        val names = candidates.map { it.snippet.title }.toTypedArray()
+
+        AlertDialog.Builder(this)
+            .setTitle("Move into folder")
+            .setItems(names) { _, which ->
+                val parent = candidates[which]
+                selected.forEach {
+                    folderStore.setParent(it.id, parent.id)
+                }
+                android.widget.Toast.makeText(
+                    this,
+                    "Moved!",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+                loadPlaylists()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // ---------- Manage menu (single playlist) ----------
 
     private fun showManageDialog(playlist: PlaylistItem) {
         val options = mutableListOf<String>()
@@ -644,8 +762,19 @@ class MainActivity : ComponentActivity() {
                     }
 
                     val items = response.body()?.items.orEmpty()
-                    // Only root playlists (no parent)
-                    val roots = items.filter { folderStore.getParent(it.id) == null }
+
+                    // Root playlists = ones that do NOT have a parent
+                    val rootItemsUnordered =
+                        items.filter { folderStore.getParent(it.id) == null }
+
+                    // Ask FolderStore for the desired ordering of these IDs
+                    val orderedIds =
+                        folderStore.orderRootPlaylists(rootItemsUnordered.map { it.id })
+
+                    // Map the IDs back to PlaylistItem objects in that order
+                    val roots = orderedIds.mapNotNull { id ->
+                        rootItemsUnordered.find { it.id == id }
+                    }
 
                     runOnUiThread {
                         swipeRefresh.isRefreshing = false
@@ -736,7 +865,6 @@ interface YouTubeApi {
 
 data class PlaylistsResponse(val items: List<PlaylistItem> = emptyList())
 
-// 🔧 contentDetails is now optional + has default
 data class PlaylistItem(
     val id: String,
     val snippet: Snippet,

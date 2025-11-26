@@ -68,4 +68,5 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
 
     implementation("com.google.android.gms:play-services-ads:23.0.0")
+    implementation("com.simplecityapps:recyclerview-fastscroll:2.0.1")
 }

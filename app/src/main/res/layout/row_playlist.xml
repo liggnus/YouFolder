@@ -10,25 +10,70 @@
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="12dp">
+        android:orientation="horizontal"
+        android:padding="12dp"
+        android:gravity="center_vertical">
 
-        <TextView
-            android:id="@+id/tvTitle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textStyle="bold"
-            android:textSize="16sp"
-            android:maxLines="2"
-            android:ellipsize="end" />
+        <!-- Checkmark for selection (hidden in normal mode) -->
+        <ImageView
+            android:id="@+id/ivCheck"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_marginEnd="8dp"
+            android:visibility="gone"
+            android:src="@android:drawable/checkbox_on_background" />
 
-        <TextView
-            android:id="@+id/tvCount"
-            android:layout_width="wrap_content"
+        <!-- Folder icon -->
+
+        <!-- Title + count -->
+        <ImageView
+            android:id="@+id/ivFolderIcon"
+            android:layout_width="67dp"
+            android:layout_height="49dp"
+            android:layout_marginEnd="8dp"
+            android:src="@drawable/ic_folder_yellow_24dp" />
+
+        <LinearLayout
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:textSize="13sp"
-            android:textColor="#808080"
-            android:text="0 videos" />
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textStyle="bold"
+                android:textSize="16sp"
+                android:maxLines="2"
+                android:ellipsize="end" />
+
+            <TextView
+                android:id="@+id/tvCount"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textSize="13sp"
+                android:textColor="#808080"
+                android:text="0 videos" />
+        </LinearLayout>
+
+        <!-- Drag handle (for reordering) -->
+        <ImageView
+            android:id="@+id/ivDragHandle"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_marginStart="8dp"
+            android:src="@android:drawable/ic_menu_sort_by_size" />
+
+        <!-- Three-dot menu -->
+        <ImageButton
+            android:id="@+id/btnMore"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_marginStart="4dp"
+            android:background="@android:color/transparent"
+            android:contentDescription="More options"
+            android:src="@android:drawable/ic_menu_more" />
     </LinearLayout>
 </androidx.cardview.widget.CardView>

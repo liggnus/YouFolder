@@ -7,14 +7,19 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.gms.ads.AdRequest
+import com.google.android.gms.ads.AdView
+import com.google.android.gms.ads.MobileAds
 import net.openid.appauth.AuthState
 import net.openid.appauth.AuthorizationService
 import okhttp3.OkHttpClient
@@ -33,9 +38,6 @@ import retrofit2.http.PUT
 import retrofit2.http.Query
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
-import com.google.android.gms.ads.AdRequest
-import com.google.android.gms.ads.AdView
-import com.google.android.gms.ads.MobileAds
 
 class PlaylistDetailActivity : ComponentActivity() {
 
@@ -52,15 +54,24 @@ class PlaylistDetailActivity : ComponentActivity() {
     private lateinit var playlistId: String
     private lateinit var playlistTitle: String
 
-    private lateinit var btnToggleSelection: Button
+    // video selection bar
+    private lateinit var layoutVideoSelectionBar: View
     private lateinit var btnMoveSelected: Button
     private lateinit var btnDeleteSelected: Button
+    private lateinit var btnCancelVideoSelection: Button
+
     private lateinit var btnAddSubfolder: ImageButton
 
     private val videoRows = mutableListOf<VideoRow>()
     private val handler = Handler(Looper.getMainLooper())
 
     private lateinit var adView: AdView
+
+    // folder selection bar
+    private lateinit var layoutFolderSelectionBar: View
+    private lateinit var btnMoveFolders: Button
+    private lateinit var btnDeleteFolders: Button
+    private lateinit var btnCancelFolderSelection: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -69,8 +80,7 @@ class PlaylistDetailActivity : ComponentActivity() {
         // ---- Ads ----
         MobileAds.initialize(this) {}
         adView = findViewById(R.id.adView)
-        val adRequest = AdRequest.Builder().build()
-        adView.loadAd(adRequest)
+        adView.loadAd(AdRequest.Builder().build())
 
         folderStore = FolderStore(this)
 
@@ -84,13 +94,86 @@ class PlaylistDetailActivity : ComponentActivity() {
 
         btnBack.setOnClickListener { finish() }
 
+        // --- folder selection bar ---
+        layoutFolderSelectionBar = findViewById(R.id.layoutFolderSelectionBar)
+        btnMoveFolders = findViewById(R.id.btnMoveFolders)
+        btnDeleteFolders = findViewById(R.id.btnDeleteFolders)
+        btnCancelFolderSelection = findViewById(R.id.btnCancelFolderSelection)
+
+        btnCancelFolderSelection.setOnClickListener {
+            subAdapter.setSelectionMode(false)
+        }
+
+        btnMoveFolders.setOnClickListener {
+            val selected = subAdapter.selectedItems()
+            if (selected.isNotEmpty()) {
+                showMoveSelectedFoldersDialog(selected)
+            }
+        }
+
+        btnDeleteFolders.setOnClickListener {
+            val selected = subAdapter.selectedItems()
+            if (selected.isNotEmpty()) {
+                showDeleteSelectedFoldersDialog(selected)
+            }
+        }
+
         btnAddSubfolder = findViewById(R.id.btnAddSubfolder)
         btnAddSubfolder.setOnClickListener { showCreateSubfolderDialog() }
 
-        // ---- Sub-playlists list (vertical) ----
+        // ---- Sub-playlists list ----
         rvSubPlaylists = findViewById(R.id.rvSubPlaylists)
         rvSubPlaylists.layoutManager = LinearLayoutManager(this)
         rvSubPlaylists.adapter = subAdapter
+
+        // Drag-to-reorder for subfolders (drag handle in each row)
+        val folderDragCallback = object : ItemTouchHelper.SimpleCallback(
+            ItemTouchHelper.UP or ItemTouchHelper.DOWN,
+            0
+        ) {
+            override fun onMove(
+                recyclerView: RecyclerView,
+                viewHolder: RecyclerView.ViewHolder,
+                target: RecyclerView.ViewHolder
+            ): Boolean {
+                val fromPos = viewHolder.bindingAdapterPosition
+                val toPos = target.bindingAdapterPosition
+
+                subAdapter.moveItem(fromPos, toPos)
+
+                // persist new order for this parent playlist
+                val newOrderIds = subAdapter.currentItems().map { it.id }
+                folderStore.setChildrenOrder(playlistId, newOrderIds)
+
+                return true
+            }
+
+            override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
+                // no swipe
+            }
+
+            override fun isLongPressDragEnabled(): Boolean = false
+        }
+
+        val folderItemTouchHelper = ItemTouchHelper(folderDragCallback)
+        folderItemTouchHelper.attachToRecyclerView(rvSubPlaylists)
+
+        subAdapter.onStartDrag = { vh ->
+            folderItemTouchHelper.startDrag(vh)
+        }
+
+        // selection mode for subfolders
+        subAdapter.onSelectionModeChanged = { enabled ->
+            layoutFolderSelectionBar.visibility = if (enabled) View.VISIBLE else View.GONE
+            btnMoveFolders.isEnabled = false
+            btnDeleteFolders.isEnabled = false
+        }
+
+        subAdapter.onSelectionChanged = { selected ->
+            val has = selected.isNotEmpty()
+            btnMoveFolders.isEnabled = has
+            btnDeleteFolders.isEnabled = has
+        }
 
         // Tap sub-folder → go deeper
         subAdapter.onItemClick = { playlist ->
@@ -103,8 +186,8 @@ class PlaylistDetailActivity : ComponentActivity() {
             startActivity(intent)
         }
 
-        // Long-press sub-folder → manage (rename / move / remove)
-        subAdapter.onItemLongClick = { playlist ->
+        // Three-dot menu on sub-folder
+        subAdapter.onMenuClick = { playlist ->
             showSubFolderMenu(playlist)
         }
 
@@ -113,44 +196,43 @@ class PlaylistDetailActivity : ComponentActivity() {
         rvVideos.layoutManager = LinearLayoutManager(this)
         rvVideos.adapter = videoAdapter
 
+        layoutVideoSelectionBar = findViewById(R.id.layoutVideoSelectionBar)
+        btnMoveSelected = findViewById(R.id.btnMoveSelected)
+        btnDeleteSelected = findViewById(R.id.btnDeleteSelected)
+        btnCancelVideoSelection = findViewById(R.id.btnCancelVideoSelection)
+
+        layoutVideoSelectionBar.visibility = View.GONE
+        btnMoveSelected.isEnabled = false
+        btnDeleteSelected.isEnabled = false
+
         // open video when not in selection mode
         videoAdapter.onVideoClick = { row ->
             val url = "https://www.youtube.com/watch?v=${row.videoId}"
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-            startActivity(intent)
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
         }
 
+        // per-row delete icon (outside selection mode)
         videoAdapter.onDeleteClick = { row ->
             AlertDialog.Builder(this)
                 .setTitle("Delete video")
                 .setMessage("Remove \"${row.title}\" from this playlist?")
                 .setPositiveButton("Delete") { _, _ ->
-                    // reuse the bulk-delete logic with a single-item list
                     deleteSelectedVideos(listOf(row))
                 }
                 .setNegativeButton("Cancel", null)
                 .show()
         }
 
-        btnToggleSelection = findViewById(R.id.btnToggleSelection)
-        btnMoveSelected = findViewById(R.id.btnMoveSelected)
-        btnDeleteSelected = findViewById(R.id.btnDeleteVideo)
-
-        // start with move/delete disabled
-        btnMoveSelected.isEnabled = false
-        btnDeleteSelected.isEnabled = false
-
-        btnToggleSelection.setOnClickListener {
-            videoAdapter.selectionMode = !videoAdapter.selectionMode
-            btnToggleSelection.text =
-                if (videoAdapter.selectionMode) "Cancel selection" else "Select videos"
-
-            // whenever we toggle selection mode, reset buttons
-            btnMoveSelected.isEnabled = false
-            btnDeleteSelected.isEnabled = false
+        // show/hide video selection bar
+        videoAdapter.onSelectionModeChanged = { enabled ->
+            layoutVideoSelectionBar.visibility = if (enabled) View.VISIBLE else View.GONE
+            if (!enabled) {
+                btnMoveSelected.isEnabled = false
+                btnDeleteSelected.isEnabled = false
+            }
         }
 
-        // when adapter selection changes, enable/disable both buttons
+        // enable/disable move/delete based on selection
         videoAdapter.onSelectionChanged = { selected ->
             val hasSelection = selected.isNotEmpty()
             btnMoveSelected.isEnabled = hasSelection
@@ -170,6 +252,10 @@ class PlaylistDetailActivity : ComponentActivity() {
             onDeleteSelectedClicked()
         }
 
+        btnCancelVideoSelection.setOnClickListener {
+            videoAdapter.selectionMode = false
+        }
+
         val json = intent.getStringExtra("authStateJson") ?: ""
         authState = AuthState.jsonDeserialize(json)
 
@@ -177,7 +263,6 @@ class PlaylistDetailActivity : ComponentActivity() {
         loadVideos()
     }
 
-    // 🔁 When coming back to this screen, re read subfolders
     override fun onResume() {
         super.onResume()
         loadSubPlaylists()
@@ -198,11 +283,7 @@ class PlaylistDetailActivity : ComponentActivity() {
                 if (title.isNotEmpty()) {
                     createSubPlaylist(title)
                 } else {
-                    Toast.makeText(
-                        this,
-                        "Name cannot be empty.",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    Toast.makeText(this, "Name cannot be empty.", Toast.LENGTH_SHORT).show()
                 }
             }
             .setNegativeButton("Cancel", null)
@@ -214,11 +295,7 @@ class PlaylistDetailActivity : ComponentActivity() {
             if (ex != null || accessToken.isNullOrBlank()) {
                 Log.e("YT", "Token error when creating subfolder", ex)
                 runOnUiThread {
-                    Toast.makeText(
-                        this,
-                        "Auth error, please try again.",
-                        Toast.LENGTH_LONG
-                    ).show()
+                    Toast.makeText(this, "Auth error, please try again.", Toast.LENGTH_LONG).show()
                 }
                 return@performActionWithFreshTokens
             }
@@ -239,10 +316,7 @@ class PlaylistDetailActivity : ComponentActivity() {
                     response: Response<PlaylistItem>
                 ) {
                     if (!response.isSuccessful) {
-                        Log.e(
-                            "YT",
-                            "Create subfolder HTTP ${response.code()} ${response.message()}"
-                        )
+                        Log.e("YT", "Create subfolder HTTP ${response.code()} ${response.message()}")
                         runOnUiThread {
                             Toast.makeText(
                                 this@PlaylistDetailActivity,
@@ -266,14 +340,14 @@ class PlaylistDetailActivity : ComponentActivity() {
                         return
                     }
 
-                    // Make this playlist a child of the current one
                     folderStore.setParent(created.id, playlistId)
 
-                    // Immediately show it in the UI
                     runOnUiThread {
                         val updated = subAdapter.currentItems().toMutableList()
                         updated.add(created)
                         subAdapter.submit(updated)
+
+                        folderStore.setChildrenOrder(playlistId, updated.map { it.id })
 
                         Toast.makeText(
                             this@PlaylistDetailActivity,
@@ -282,10 +356,7 @@ class PlaylistDetailActivity : ComponentActivity() {
                         ).show()
                     }
 
-                    // Then refresh from YouTube after a short delay
-                    handler.postDelayed({
-                        loadSubPlaylists()
-                    }, 1500L)
+                    handler.postDelayed({ loadSubPlaylists() }, 1500L)
                 }
 
                 override fun onFailure(call: Call<PlaylistItem>, t: Throwable) {
@@ -308,20 +379,13 @@ class PlaylistDetailActivity : ComponentActivity() {
         val childIds = folderStore.getChildren(playlistId)
 
         if (childIds.isEmpty()) {
-            runOnUiThread {
-                subAdapter.submit(emptyList())
-            }
+            runOnUiThread { subAdapter.submit(emptyList()) }
             return
         }
 
         authState.performActionWithFreshTokens(authService) { accessToken, _, ex ->
-            if (ex != null) {
+            if (ex != null || accessToken.isNullOrBlank()) {
                 Log.e("YT", "Token error (subfolders)", ex)
-                return@performActionWithFreshTokens
-            }
-
-            if (accessToken.isNullOrBlank()) {
-                Log.e("YT", "Missing access token (subfolders)")
                 return@performActionWithFreshTokens
             }
 
@@ -342,7 +406,10 @@ class PlaylistDetailActivity : ComponentActivity() {
                     }
 
                     val all = response.body()?.items.orEmpty()
-                    val children = all.filter { it.id in childIds }
+                    val byId = all.associateBy { it.id }
+
+                    // preserve FolderStore order
+                    val children = childIds.mapNotNull { byId[it] }
 
                     runOnUiThread {
                         subAdapter.submit(children)
@@ -354,6 +421,50 @@ class PlaylistDetailActivity : ComponentActivity() {
                 }
             })
         }
+    }
+
+    private fun showMoveSelectedFoldersDialog(selected: List<PlaylistItem>) {
+        val allSubs = subAdapter.currentItems()
+        val candidates = allSubs.filter { p -> selected.none { it.id == p.id } }
+
+        if (candidates.isEmpty()) {
+            Toast.makeText(this, "No other subfolders to move into.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val names = candidates.map { it.snippet.title }.toTypedArray()
+
+        AlertDialog.Builder(this)
+            .setTitle("Move ${selected.size} folder(s) into")
+            .setItems(names) { _, which ->
+                val newParent = candidates[which]
+                selected.forEach { child ->
+                    folderStore.setParent(child.id, newParent.id)
+                }
+                Toast.makeText(
+                    this,
+                    "Moved into \"${newParent.snippet.title}\"",
+                    Toast.LENGTH_SHORT
+                ).show()
+                loadSubPlaylists()
+                subAdapter.setSelectionMode(false)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showDeleteSelectedFoldersDialog(selected: List<PlaylistItem>) {
+        AlertDialog.Builder(this)
+            .setTitle("Delete ${selected.size} folder(s)?")
+            .setMessage("Delete the selected folders and their playlists on YouTube? This cannot be undone.")
+            .setPositiveButton("Delete") { _, _ ->
+                selected.forEach { playlist ->
+                    deleteSubfolder(playlist)
+                }
+                subAdapter.setSelectionMode(false)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun showSubFolderMenu(playlist: PlaylistItem) {
@@ -381,7 +492,6 @@ class PlaylistDetailActivity : ComponentActivity() {
             .show()
     }
 
-    // rename subfolder = rename underlying playlist
     private fun showRenameSubfolderDialog(playlist: PlaylistItem) {
         val input = EditText(this).apply {
             setText(playlist.snippet.title)
@@ -394,17 +504,9 @@ class PlaylistDetailActivity : ComponentActivity() {
             .setPositiveButton("Save") { _, _ ->
                 val newTitle = input.text.toString().trim()
                 if (newTitle.isEmpty()) {
-                    Toast.makeText(
-                        this,
-                        "Name cannot be empty.",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    Toast.makeText(this, "Name cannot be empty.", Toast.LENGTH_SHORT).show()
                 } else if (newTitle == playlist.snippet.title) {
-                    Toast.makeText(
-                        this,
-                        "Name not changed.",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    Toast.makeText(this, "Name not changed.", Toast.LENGTH_SHORT).show()
                 } else {
                     renameSubfolder(playlist, newTitle)
                 }
@@ -418,11 +520,7 @@ class PlaylistDetailActivity : ComponentActivity() {
             if (ex != null || accessToken.isNullOrBlank()) {
                 Log.e("YT", "Token error when renaming subfolder", ex)
                 runOnUiThread {
-                    Toast.makeText(
-                        this,
-                        "Auth error, please try again.",
-                        Toast.LENGTH_LONG
-                    ).show()
+                    Toast.makeText(this, "Auth error, please try again.", Toast.LENGTH_LONG).show()
                 }
                 return@performActionWithFreshTokens
             }
@@ -443,10 +541,7 @@ class PlaylistDetailActivity : ComponentActivity() {
                     response: Response<PlaylistItem>
                 ) {
                     if (!response.isSuccessful) {
-                        Log.e(
-                            "YT",
-                            "Rename subfolder HTTP ${response.code()} ${response.message()}"
-                        )
+                        Log.e("YT", "Rename subfolder HTTP ${response.code()} ${response.message()}")
                         runOnUiThread {
                             Toast.makeText(
                                 this@PlaylistDetailActivity,
@@ -484,11 +579,7 @@ class PlaylistDetailActivity : ComponentActivity() {
     private fun moveOutToParentFolder(child: PlaylistItem) {
         val parentOfCurrent = folderStore.getParent(playlistId)
         folderStore.setParent(child.id, parentOfCurrent)
-        Toast.makeText(
-            this,
-            "Moved to parent folder",
-            Toast.LENGTH_SHORT
-        ).show()
+        Toast.makeText(this, "Moved to parent folder", Toast.LENGTH_SHORT).show()
         loadSubPlaylists()
     }
 
@@ -497,11 +588,7 @@ class PlaylistDetailActivity : ComponentActivity() {
         val candidates = allSubs.filter { it.id != child.id }
 
         if (candidates.isEmpty()) {
-            Toast.makeText(
-                this,
-                "No other subfolders to move into.",
-                Toast.LENGTH_SHORT
-            ).show()
+            Toast.makeText(this, "No other subfolders to move into.", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -539,11 +626,7 @@ class PlaylistDetailActivity : ComponentActivity() {
             if (ex != null || accessToken.isNullOrBlank()) {
                 Log.e("YT", "Token error when deleting subfolder", ex)
                 runOnUiThread {
-                    Toast.makeText(
-                        this,
-                        "Auth error, please try again.",
-                        Toast.LENGTH_LONG
-                    ).show()
+                    Toast.makeText(this, "Auth error, please try again.", Toast.LENGTH_LONG).show()
                 }
                 return@performActionWithFreshTokens
             }
@@ -557,7 +640,10 @@ class PlaylistDetailActivity : ComponentActivity() {
             ).enqueue(object : Callback<Void> {
                 override fun onResponse(call: Call<Void>, response: Response<Void>) {
                     if (!response.isSuccessful) {
-                        Log.e("YT", "Delete playlist failed ${response.code()} ${response.message()}")
+                        Log.e(
+                            "YT",
+                            "Delete playlist failed ${response.code()} ${response.message()}"
+                        )
                         runOnUiThread {
                             Toast.makeText(
                                 this@PlaylistDetailActivity,
@@ -568,16 +654,13 @@ class PlaylistDetailActivity : ComponentActivity() {
                         return
                     }
 
-                    // (Optional) if you ever add a method on FolderStore to clean up:
-                    // folderStore.remove(playlist.id)
-
                     runOnUiThread {
                         Toast.makeText(
                             this@PlaylistDetailActivity,
                             "Deleted folder \"${playlist.snippet.title}\"",
                             Toast.LENGTH_SHORT
                         ).show()
-                        loadSubPlaylists()   // refresh list so it disappears
+                        loadSubPlaylists()
                     }
                 }
 
@@ -595,7 +678,7 @@ class PlaylistDetailActivity : ComponentActivity() {
         }
     }
 
-    // ---------- Videos (with thumbnails + pagination, no 50-limit) ----------
+    // ---------- Videos ----------
 
     private fun loadVideos() {
         authState.performActionWithFreshTokens(authService) { accessToken, _, ex ->
@@ -657,12 +740,11 @@ class PlaylistDetailActivity : ComponentActivity() {
                         if (next != null) {
                             fetchPage(next)
                         } else {
-                            // final UI update with ALL videos
                             runOnUiThread {
                                 videoRows.clear()
                                 videoRows.addAll(accumulated)
                                 videoAdapter.selectionMode = false
-                                btnToggleSelection.text = "Select videos"
+                                layoutVideoSelectionBar.visibility = View.GONE
                                 btnMoveSelected.isEnabled = false
                                 btnDeleteSelected.isEnabled = false
                                 videoAdapter.submit(videoRows)
@@ -677,13 +759,11 @@ class PlaylistDetailActivity : ComponentActivity() {
                 })
             }
 
-            // start with first page
             fetchPage(null)
         }
     }
 
     private fun onDeleteSelectedClicked() {
-        // use the same selection logic as move
         val selectedVideos = videoAdapter.currentItems().filter { it.selected }
 
         if (selectedVideos.isEmpty()) {
@@ -761,9 +841,6 @@ class PlaylistDetailActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * Delete all selected videos from this playlist (YouTube playlistItems API).
-     */
     private fun deleteSelectedVideos(selected: List<VideoRow>) {
         if (selected.isEmpty()) return
 
@@ -784,7 +861,6 @@ class PlaylistDetailActivity : ComponentActivity() {
                 ).show()
                 btnMoveSelected.isEnabled = false
                 btnDeleteSelected.isEnabled = false
-                btnToggleSelection.isEnabled = false
             }
 
             fun processIndex(index: Int) {
@@ -796,7 +872,7 @@ class PlaylistDetailActivity : ComponentActivity() {
                             "Deleted ${selected.size} video(s)",
                             Toast.LENGTH_SHORT
                         ).show()
-                        btnToggleSelection.isEnabled = true
+                        videoAdapter.selectionMode = false
                     }
                     return
                 }
@@ -830,10 +906,6 @@ class PlaylistDetailActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * Move all selected videos to target playlist in sequence:
-     * insert then delete then next.
-     */
     private fun moveVideosToPlaylist(selected: List<VideoRow>, targetPlaylistId: String) {
         if (selected.isEmpty()) return
 
@@ -853,7 +925,6 @@ class PlaylistDetailActivity : ComponentActivity() {
                     Toast.LENGTH_SHORT
                 ).show()
                 btnMoveSelected.isEnabled = false
-                btnToggleSelection.isEnabled = false
                 btnDeleteSelected.isEnabled = false
             }
 
@@ -866,7 +937,7 @@ class PlaylistDetailActivity : ComponentActivity() {
                             "Moved ${selected.size} video(s)",
                             Toast.LENGTH_SHORT
                         ).show()
-                        btnToggleSelection.isEnabled = true
+                        videoAdapter.selectionMode = false
                     }
                     return
                 }
@@ -1012,7 +1083,7 @@ data class PlaylistItemsResponse(
 )
 
 data class PlaylistVideoItem(
-    val id: String,               // playlistItemId
+    val id: String, // playlistItemId
     val snippet: VideoSnippet?
 )
 
