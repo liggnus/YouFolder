@@ -1,4 +1,10 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../controllers/app_controller.dart';
 import '../models/playlist.dart';
@@ -20,6 +26,7 @@ class LibraryScreen extends StatefulWidget {
 class _LibraryScreenState extends State<LibraryScreen> {
   final Set<String> _selectedPlaylistIds = <String>{};
   bool _reorderMode = false;
+  bool _deleteMode = false;
   final ScrollController _scrollController = ScrollController();
 
   bool get _isSelecting => _selectedPlaylistIds.isNotEmpty;
@@ -92,6 +99,31 @@ class _LibraryScreenState extends State<LibraryScreen> {
     setState(() => _selectedPlaylistIds.clear());
   }
 
+  void _enterDeleteMode() {
+    setState(() {
+      _deleteMode = true;
+      _reorderMode = false;
+      _selectedPlaylistIds.clear();
+    });
+  }
+
+  void _exitDeleteMode() {
+    setState(() {
+      _deleteMode = false;
+      _selectedPlaylistIds.clear();
+    });
+  }
+
+  Future<void> _confirmDelete() async {
+    if (_selectedPlaylistIds.isEmpty) {
+      return;
+    }
+    await _deleteSelected();
+    if (mounted) {
+      setState(() => _deleteMode = false);
+    }
+  }
+
   void _toggleReorderMode() {
     setState(() => _reorderMode = !_reorderMode);
   }
@@ -99,6 +131,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   void _handleSelectionAction(String value) {
     if (value == 'delete') {
       _deleteSelected();
+    } else if (value == 'share') {
+      _shareSelectedBranches();
     } else if (value == 'pin') {
       _togglePinnedSelected();
     } else if (value == 'favorite') {
@@ -130,17 +164,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
         value: 'delete',
         child: Text('Delete'),
       ),
-      PopupMenuItem(
-        value: 'pin',
-        child: Text(anyUnpinned ? 'Pin' : 'Unpin'),
-      ),
-      PopupMenuItem(
-        value: 'favorite',
-        child: Text(anyNotFav ? 'Favorite' : 'Unfavorite'),
-      ),
-      PopupMenuItem(
-        value: 'hide',
-        child: Text(anyVisible ? 'Hide' : 'Unhide'),
+      const PopupMenuItem(
+        value: 'move',
+        child: Text('Move to'),
       ),
       if (_selectedPlaylistIds.length == 1)
         const PopupMenuItem(
@@ -148,10 +174,75 @@ class _LibraryScreenState extends State<LibraryScreen> {
           child: Text('Rename'),
         ),
       const PopupMenuItem(
-        value: 'move',
-        child: Text('Move to'),
+        value: 'share',
+        child: Text('Share'),
+      ),
+      PopupMenuItem(
+        value: 'hide',
+        child: Text(anyVisible ? 'Hide' : 'Unhide'),
+      ),
+      PopupMenuItem(
+        value: 'favorite',
+        child: Text(anyNotFav ? 'Favorite' : 'Unfavorite'),
+      ),
+      PopupMenuItem(
+        value: 'pin',
+        child: Text(anyUnpinned ? 'Pin' : 'Unpin'),
       ),
     ];
+  }
+
+  Future<void> _shareSelectedBranches() async {
+    if (_selectedPlaylistIds.isEmpty) {
+      return;
+    }
+    final export = await widget.controller.buildTreeExportWithVideos(
+      name: 'Shared branch',
+      rootIds: _selectedPlaylistIds.toList(),
+    );
+    await _shareExport(export, 'youfolder-branch.json');
+  }
+
+  Future<void> _shareEntireTree() async {
+    final export = await widget.controller.buildTreeExportWithVideos(
+      name: 'Shared tree',
+    );
+    await _shareExport(export, 'youfolder-tree.json');
+  }
+
+  Future<void> _shareExport(
+    Map<String, dynamic> export,
+    String fileName,
+  ) async {
+    final dir = await getTemporaryDirectory();
+    final file = File('${dir.path}/$fileName');
+    await file.writeAsString(const JsonEncoder.withIndent('  ').convert(export));
+    await Share.shareXFiles([XFile(file.path)]);
+  }
+
+  Future<void> _importSharedTree() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['json', 'youfolder'],
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty) {
+      return;
+    }
+    final file = result.files.first;
+    final bytes = file.bytes;
+    final content = bytes != null
+        ? utf8.decode(bytes)
+        : await File(file.path!).readAsString();
+    final treeName =
+        widget.controller.parseSharedTreeJson(content).name;
+    await widget.controller.importSharedTreeJson(content);
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Imported "$treeName".')),
+    );
   }
 
   Future<void> _togglePinnedSelected() async {
@@ -248,6 +339,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     }
   }
 
+
   Future<void> _moveSelected() async {
     final ids = _selectedPlaylistIds.toList();
     final result = await Navigator.push<String?>(
@@ -295,89 +387,175 @@ class _LibraryScreenState extends State<LibraryScreen> {
       animation: widget.controller,
       builder: (context, _) {
         final playlists = widget.controller.repository.rootPlaylists();
-        final filteredPlaylists = playlists;
+        final sharedRoots =
+            playlists.where((playlist) => playlist.isShared).toList();
+        final filteredPlaylists =
+            playlists.where((playlist) => !playlist.isShared).toList();
 
         return Scaffold(
           appBar: AppBar(
-            leading: _isSelecting
+            leading: _deleteMode
                 ? IconButton(
-                    tooltip: 'Cancel selection',
-                    onPressed: _clearSelection,
+                    tooltip: 'Cancel delete',
+                    onPressed: _exitDeleteMode,
                     icon: const Icon(Icons.close),
                   )
-                : null,
-            title: _isSelecting
-                ? Text('${_selectedPlaylistIds.length} selected')
-                : Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Image.asset(
-                        'assets/app_icon.png',
-                        width: 24,
-                        height: 24,
+                : _isSelecting
+                    ? IconButton(
+                        tooltip: 'Cancel selection',
+                        onPressed: _clearSelection,
+                        icon: const Icon(Icons.close),
+                      )
+                    : null,
+            title: _deleteMode
+                ? Text(
+                    _selectedPlaylistIds.isEmpty
+                        ? 'Select folders'
+                        : '${_selectedPlaylistIds.length} selected',
+                  )
+                : _isSelecting
+                    ? Text('${_selectedPlaylistIds.length} selected')
+                    : FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Image.asset(
+                              'assets/app_icon.png',
+                              width: 36,
+                              height: 36,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              'YouFolder',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleMedium
+                                  ?.copyWith(fontSize: 16),
+                            ),
+                          ],
+                        ),
                       ),
-                      const SizedBox(width: 8),
-                      const Text('YouFolder'),
-                    ],
-                  ),
-            actions: _isSelecting
+            actions: _deleteMode
                 ? [
-                    PopupMenuButton<String>(
-                      tooltip: 'Actions',
-                      onSelected: _handleSelectionAction,
-                      itemBuilder: (context) => _selectionMenuItems(),
-                      icon: const Icon(Icons.more_vert),
+                    IconButton(
+                      tooltip: 'Confirm delete',
+                      onPressed:
+                          _selectedPlaylistIds.isEmpty ? null : _confirmDelete,
+                      icon: const Icon(Icons.check),
                     ),
                   ]
-                : [
-                    IconButton(
-                      tooltip: 'Search',
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) =>
-                                SearchScreen(controller: widget.controller),
-                          ),
-                        );
-                      },
-                      icon: const Icon(Icons.search),
-                    ),
-                    PopupMenuButton<String>(
-                      tooltip: 'Account',
-                      onSelected: (value) {
-                        if (value == 'switch') {
-                          widget.controller.switchAccount();
-                        } else if (value == 'signout') {
-                          widget.controller.signOut();
-                        }
-                      },
-                      itemBuilder: (context) => const [
-                        PopupMenuItem(
-                          value: 'switch',
-                          child: Text('Switch account'),
+                : _isSelecting
+                    ? [
+                        PopupMenuButton<String>(
+                          tooltip: 'Actions',
+                          onSelected: _handleSelectionAction,
+                          itemBuilder: (context) => _selectionMenuItems(),
+                          icon: const Icon(Icons.more_vert),
                         ),
-                        PopupMenuItem(
-                          value: 'signout',
-                          child: Text('Sign out'),
+                      ]
+                    : [
+                        IconButton(
+                          tooltip: 'Search',
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) =>
+                                    SearchScreen(controller: widget.controller),
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.search),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 36,
+                            minHeight: 36,
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        PopupMenuButton<String>(
+                          tooltip: 'Account',
+                          onSelected: (value) async {
+                            if (value == 'switch') {
+                              widget.controller.switchAccount();
+                            } else if (value == 'signout') {
+                              final navigator = Navigator.of(context);
+                              await widget.controller.signOut();
+                              if (!mounted) {
+                                return;
+                              }
+                              navigator.popUntil(
+                                (route) => route.isFirst,
+                              );
+                            } else if (value == 'share_tree') {
+                              await _shareEntireTree();
+                            } else if (value == 'import_tree') {
+                              await _importSharedTree();
+                            }
+                          },
+                          itemBuilder: (context) => const [
+                            PopupMenuItem(
+                              value: 'switch',
+                              child: Text('Switch account'),
+                            ),
+                            PopupMenuItem(
+                              value: 'share_tree',
+                              child: Text('Share my tree'),
+                            ),
+                            PopupMenuItem(
+                              value: 'import_tree',
+                              child: Text('Import tree'),
+                            ),
+                            PopupMenuItem(
+                              value: 'signout',
+                              child: Text('Sign out'),
+                            ),
+                          ],
+                          icon: const Icon(Icons.account_circle_outlined),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 36,
+                            minHeight: 36,
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'New folder',
+                          onPressed:
+                              widget.controller.isBusy ? null : _createPlaylist,
+                          icon: const Icon(Icons.add),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 36,
+                            minHeight: 36,
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        IconButton(
+                          tooltip: 'Delete',
+                          onPressed: _enterDeleteMode,
+                          icon: const Icon(Icons.delete_outline),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 36,
+                            minHeight: 36,
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        IconButton(
+                          tooltip: _reorderMode ? 'Done' : 'Reorder',
+                          onPressed: _toggleReorderMode,
+                          icon: Icon(
+                            _reorderMode ? Icons.check : Icons.swap_vert,
+                          ),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 36,
+                            minHeight: 36,
+                          ),
+                          visualDensity: VisualDensity.compact,
                         ),
                       ],
-                      icon: const Icon(Icons.account_circle_outlined),
-                    ),
-                    IconButton(
-                      tooltip: 'New folder',
-                      onPressed:
-                          widget.controller.isBusy ? null : _createPlaylist,
-                      icon: const Icon(Icons.add),
-                    ),
-                    IconButton(
-                      tooltip: _reorderMode ? 'Done' : 'Reorder',
-                      onPressed: _toggleReorderMode,
-                      icon: Icon(
-                        _reorderMode ? Icons.check : Icons.swap_vert,
-                      ),
-                    ),
-                  ],
           ),
           body: Scrollbar(
             thumbVisibility: true,
@@ -389,7 +567,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
               slivers: [
                 SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.all(16),
+                    padding: const EdgeInsets.fromLTRB(16, 1, 16, 8),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -397,14 +575,73 @@ class _LibraryScreenState extends State<LibraryScreen> {
                           const LinearProgressIndicator(),
                           const SizedBox(height: 16),
                         ],
-                        const Divider(height: 12, thickness: 0.5),
+                        if (widget.controller.isQuotaExceeded) ...[
+                          _QuotaBanner(
+                            onRetry: widget.controller.syncPlaylists,
+                          ),
+                          const SizedBox(height: 12),
+                        ],
                         _RootBreadcrumb(
                           onTap: () {
                             widget.controller.syncPlaylists();
                           },
                         ),
-                        const SizedBox(height: 6),
-                        const Divider(height: 12, thickness: 0.5),
+                        if (sharedRoots.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            'Shared with me',
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                          const SizedBox(height: 4),
+                          ...sharedRoots.map(
+                            (playlist) => ListTile(
+                              contentPadding:
+                                  const EdgeInsets.fromLTRB(0, 8, 0, 8),
+                              minLeadingWidth: 56,
+                              titleAlignment: ListTileTitleAlignment.center,
+                              leading: SizedBox(
+                                width: 56,
+                                height: 56,
+                                child: Center(
+                                  child: Icon(
+                                    _selectedPlaylistIds.contains(playlist.id)
+                                        ? Icons.folder
+                                        : Icons.folder_outlined,
+                                    size: 40,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurface,
+                                  ),
+                                ),
+                              ),
+                              title: Text(playlist.title),
+                              subtitle: Text(
+                                playlist.sharedBy == null ||
+                                        playlist.sharedBy!.isEmpty
+                                    ? 'Shared tree'
+                                    : 'Shared by ${playlist.sharedBy}',
+                              ),
+                              onTap: () {
+                                if (_reorderMode) {
+                                  return;
+                                }
+                                if (_deleteMode || _isSelecting) {
+                                  _toggleSelection(playlist.id);
+                                } else {
+                                  _openPlaylist(playlist);
+                                }
+                              },
+                              onLongPress: _reorderMode
+                                  ? null
+                                  : () => _toggleSelection(playlist.id),
+                              tileColor: _selectedPlaylistIds
+                                      .contains(playlist.id)
+                                  ? Colors.grey.shade200
+                                  : null,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 2),
                         if (_reorderMode)
                           const Padding(
                             padding: EdgeInsets.only(bottom: 6),
@@ -412,7 +649,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                               'Drag the handle to reorder playlists.',
                             ),
                           ),
-                        const SizedBox(height: 2),
+                        const SizedBox(height: 0),
                       ],
                     ),
                   ),
@@ -424,11 +661,16 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       if (newIndex > oldIndex) {
                         newIndex -= 1;
                       }
-                      final orderedIds =
-                          playlists.map((playlist) => playlist.id).toList();
-                      final moved = orderedIds.removeAt(oldIndex);
-                      orderedIds.insert(newIndex, moved);
-                      await widget.controller.reorderRootPlaylists(orderedIds);
+                      final normalIds = filteredPlaylists
+                          .map((playlist) => playlist.id)
+                          .toList();
+                      final moved = normalIds.removeAt(oldIndex);
+                      normalIds.insert(newIndex, moved);
+                      final sharedIds = sharedRoots
+                          .map((playlist) => playlist.id)
+                          .toList();
+                      await widget.controller
+                          .reorderRootPlaylists([...sharedIds, ...normalIds]);
                     },
                     itemBuilder: (context, index) {
                       final playlist = filteredPlaylists[index];
@@ -437,34 +679,46 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       return Material(
                         key: ValueKey(playlist.id),
                         color: Colors.transparent,
-                        child: ListTile(
-                          leading: _reorderMode
-                              ? ReorderableDragStartListener(
-                                  index: index,
-                                  child: const Icon(Icons.drag_handle),
-                                )
-                              : selected
-                                  ? Icon(
-                                      Icons.check_circle,
-                                      color: Theme.of(context).colorScheme.primary,
-                                    )
-                                  : const Icon(Icons.folder_outlined),
-                          title: Text(playlist.title),
-                          trailing: _buildFlags(playlist),
-                          tileColor: selected ? Colors.grey.shade200 : null,
-                          onTap: () {
-                            if (_reorderMode) {
-                              return;
-                            }
-                            if (_isSelecting) {
-                              _toggleSelection(playlist.id);
-                            } else {
-                              _openPlaylist(playlist);
-                            }
-                          },
-                          onLongPress: _reorderMode
-                              ? null
-                              : () => _toggleSelection(playlist.id),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          child: ListTile(
+                            minLeadingWidth: 56,
+                            contentPadding: const EdgeInsets.fromLTRB(0, 8, 0, 8),
+                            titleAlignment: ListTileTitleAlignment.center,
+                            leading: _reorderMode
+                                ? ReorderableDragStartListener(
+                                    index: index,
+                                    child: const Icon(Icons.drag_handle),
+                                  )
+                                : SizedBox(
+                                    width: 56,
+                                    height: 56,
+                                    child: Center(
+                                      child: Icon(
+                                        selected
+                                            ? Icons.folder
+                                            : Icons.folder_outlined,
+                                        size: 40,
+                                      ),
+                                    ),
+                                  ),
+                            title: Text(playlist.title),
+                            trailing: _buildFlags(playlist),
+                            tileColor: selected ? Colors.grey.shade200 : null,
+                            onTap: () {
+                              if (_reorderMode) {
+                                return;
+                              }
+                              if (_deleteMode || _isSelecting) {
+                                _toggleSelection(playlist.id);
+                              } else {
+                                _openPlaylist(playlist);
+                              }
+                            },
+                            onLongPress: _reorderMode
+                                ? null
+                                : () => _toggleSelection(playlist.id),
+                          ),
                         ),
                       );
                     },
@@ -514,7 +768,49 @@ class _RootBreadcrumb extends StatelessWidget {
       message: 'Root',
       child: TextButton(
         onPressed: onTap,
+        style: TextButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
+          minimumSize: Size.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
         child: const HomeFolderIcon(),
+      ),
+    );
+  }
+}
+
+class _QuotaBanner extends StatelessWidget {
+  const _QuotaBanner({required this.onRetry});
+
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: scheme.errorContainer,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.warning_amber_outlined, color: scheme.onErrorContainer),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'YouTube API quota exceeded. Some data may not refresh until quota resets.',
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: scheme.onErrorContainer),
+            ),
+          ),
+          TextButton(
+            onPressed: onRetry,
+            child: const Text('Retry'),
+          ),
+        ],
       ),
     );
   }

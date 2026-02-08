@@ -106,6 +106,7 @@ class AppRepository {
         if (!ids.contains(playlistId)) {
           ids.add(playlistId);
         }
+        _clearSharedFlag(playlistId);
       }
     }
     playlistChildIds.removeWhere((key, value) => value.isEmpty);
@@ -163,6 +164,8 @@ class AppRepository {
       isPinned: existing.isPinned,
       isFavorite: existing.isFavorite,
       isHidden: existing.isHidden,
+      isShared: existing.isShared,
+      sharedBy: existing.sharedBy,
     );
   }
 
@@ -180,6 +183,8 @@ class AppRepository {
       isPinned: existing.isPinned,
       isFavorite: existing.isFavorite,
       isHidden: existing.isHidden,
+      isShared: existing.isShared ? false : existing.isShared,
+      sharedBy: existing.isShared ? null : existing.sharedBy,
     );
   }
 
@@ -197,6 +202,8 @@ class AppRepository {
       isPinned: pinned,
       isFavorite: existing.isFavorite,
       isHidden: existing.isHidden,
+      isShared: existing.isShared,
+      sharedBy: existing.sharedBy,
     );
   }
 
@@ -214,6 +221,8 @@ class AppRepository {
       isPinned: existing.isPinned,
       isFavorite: favorite,
       isHidden: existing.isHidden,
+      isShared: existing.isShared,
+      sharedBy: existing.sharedBy,
     );
   }
 
@@ -231,6 +240,30 @@ class AppRepository {
       isPinned: existing.isPinned,
       isFavorite: existing.isFavorite,
       isHidden: hidden,
+      isShared: existing.isShared,
+      sharedBy: existing.sharedBy,
+    );
+  }
+
+  void _clearSharedFlag(String playlistId) {
+    final index = playlists.indexWhere((item) => item.id == playlistId);
+    if (index == -1) {
+      return;
+    }
+    final existing = playlists[index];
+    if (!existing.isShared) {
+      return;
+    }
+    playlists[index] = Playlist(
+      id: existing.id,
+      title: existing.title,
+      videoCount: existing.videoCount,
+      isYouTube: existing.isYouTube,
+      isPinned: existing.isPinned,
+      isFavorite: existing.isFavorite,
+      isHidden: existing.isHidden,
+      isShared: false,
+      sharedBy: null,
     );
   }
 

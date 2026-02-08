@@ -7,6 +7,8 @@ class Playlist {
     this.isPinned = false,
     this.isFavorite = false,
     this.isHidden = false,
+    this.isShared = false,
+    this.sharedBy,
   });
 
   final String id;
@@ -16,6 +18,8 @@ class Playlist {
   final bool isPinned;
   final bool isFavorite;
   final bool isHidden;
+  final bool isShared;
+  final String? sharedBy;
 
   Map<String, dynamic> toMap() {
     return {
@@ -26,6 +30,8 @@ class Playlist {
       'isPinned': isPinned,
       'isFavorite': isFavorite,
       'isHidden': isHidden,
+      'isShared': isShared,
+      'sharedBy': sharedBy,
     };
   }
 
@@ -38,6 +44,8 @@ class Playlist {
       isPinned: map['isPinned'] == true,
       isFavorite: map['isFavorite'] == true,
       isHidden: map['isHidden'] == true,
+      isShared: map['isShared'] == true,
+      sharedBy: map['sharedBy']?.toString(),
     );
   }
 }

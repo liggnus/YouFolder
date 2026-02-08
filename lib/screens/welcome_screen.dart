@@ -47,11 +47,11 @@ class WelcomeScreen extends StatelessWidget {
                   spacing: 12,
                   children: [
                     TextButton(
-                      onPressed: () => _openUrl('https://example.com/terms'),
+                      onPressed: () => _openUrl('https://sunnysideup.app/terms'),
                       child: const Text('Terms and Conditions'),
                     ),
                     TextButton(
-                      onPressed: () => _openUrl('https://example.com/privacy'),
+                      onPressed: () => _openUrl('https://sunnysideup.app/privacy-policy'),
                       child: const Text('Privacy Policy'),
                     ),
                   ],

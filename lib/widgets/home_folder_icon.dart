@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 class HomeFolderIcon extends StatelessWidget {
-  const HomeFolderIcon({super.key, this.size = 20, this.color});
+  const HomeFolderIcon({super.key, this.size = 32, this.color});
 
   final double size;
   final Color? color;

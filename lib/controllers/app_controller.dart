@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:googleapis/youtube/v3.dart' as yt;
@@ -5,6 +7,7 @@ import 'package:googleapis/youtube/v3.dart' as yt;
 import '../data/app_repository.dart';
 import '../data/app_storage.dart';
 import '../models/playlist.dart';
+import '../models/shared_tree.dart';
 import '../models/video_item.dart';
 import '../services/google_auth_client.dart';
 import '../services/youtube_service.dart';
@@ -34,6 +37,8 @@ class AppController extends ChangeNotifier {
   final Set<String> _loadingVideos = {};
   bool _searchLoading = false;
   double _searchProgress = 0;
+  bool _quotaExceeded = false;
+  final Map<String, List<VideoItem>> _sharedVideoCache = {};
 
   bool get isSignedIn => _account != null;
   bool get isBusy => _busy;
@@ -41,6 +46,8 @@ class AppController extends ChangeNotifier {
   bool isLoadingVideos(String playlistId) => _loadingVideos.contains(playlistId);
   bool get isSearchLoading => _searchLoading;
   double get searchProgress => _searchProgress;
+  bool get isQuotaExceeded => _quotaExceeded;
+  Map<String, List<VideoItem>> get sharedVideoCache => _sharedVideoCache;
 
   Future<void> init() async {
     _account = await _signIn.signInSilently();
@@ -48,7 +55,208 @@ class AppController extends ChangeNotifier {
       await _attachYouTubeApi();
       await syncPlaylists();
     }
+    _loadSharedVideos();
     notifyListeners();
+  }
+
+  void _loadSharedVideos() {
+    final raw = storage.loadSharedVideos();
+    _sharedVideoCache
+      ..clear()
+      ..addAll(
+        raw.map(
+          (key, value) => MapEntry(
+            key,
+            value.map(VideoItem.fromMap).toList(),
+          ),
+        ),
+      );
+  }
+
+  Map<String, dynamic> buildTreeExport({
+    required String name,
+    List<String>? rootIds,
+  }) {
+    final allIds = <String>{};
+    final roots = rootIds ??
+        repository.rootPlaylists().map((playlist) => playlist.id).toList();
+    for (final rootId in roots) {
+      _collectSubtree(rootId, allIds);
+    }
+    final playlists = repository.playlists
+        .where((playlist) => allIds.contains(playlist.id))
+        .toList();
+    final playlistChildIds = <String, List<String>>{};
+    for (final entry in repository.playlistChildIds.entries) {
+      if (!allIds.contains(entry.key)) {
+        continue;
+      }
+      final children =
+          entry.value.where((id) => allIds.contains(id)).toList();
+      if (children.isNotEmpty) {
+        playlistChildIds[entry.key] = children;
+      }
+    }
+    final orderedRoots = roots.where(allIds.contains).toList();
+    return {
+      'version': 1,
+      'treeName': name,
+      'exportedAt': DateTime.now().toUtc().toIso8601String(),
+      'playlists': playlists.map((playlist) => playlist.toMap()).toList(),
+      'rootOrder': orderedRoots,
+      'playlistChildIds': playlistChildIds,
+    };
+  }
+
+  void _collectSubtree(String rootId, Set<String> out) {
+    if (out.contains(rootId)) {
+      return;
+    }
+    out.add(rootId);
+    final children = repository.playlistChildIds[rootId] ?? <String>[];
+    for (final child in children) {
+      _collectSubtree(child, out);
+    }
+  }
+
+  SharedTree parseSharedTreeJson(String jsonString) {
+    final map = jsonDecode(jsonString) as Map<dynamic, dynamic>;
+    final normalized = {
+      ...map,
+      'name': map['treeName'] ?? map['name'] ?? 'Shared tree',
+    };
+    return SharedTree.fromMap(normalized);
+  }
+
+  Future<void> importSharedTreeJson(String jsonString) async {
+    final sharedTree = parseSharedTreeJson(jsonString);
+    final idMap = <String, String>{};
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    for (var i = 0; i < sharedTree.playlists.length; i += 1) {
+      final oldId = sharedTree.playlists[i].id;
+      idMap[oldId] = 'import-$now-$i';
+    }
+
+    final wrapperId = 'import-root-$now';
+    final sharedBy = sharedTree.sharedBy;
+    final wrapper = Playlist(
+      id: wrapperId,
+      title: sharedTree.name,
+      videoCount: 0,
+      isYouTube: false,
+      isShared: true,
+      sharedBy: sharedBy,
+    );
+    repository.upsertPlaylist(wrapper);
+    repository.addToRoot(wrapperId);
+
+    for (final playlist in sharedTree.playlists) {
+      final newId = idMap[playlist.id] ?? playlist.id;
+      final videoCount =
+          sharedTree.videosByPlaylist[playlist.id]?.length ?? 0;
+      repository.upsertPlaylist(
+        Playlist(
+          id: newId,
+          title: playlist.title,
+          videoCount: videoCount,
+          isYouTube: false,
+          isPinned: playlist.isPinned,
+          isFavorite: playlist.isFavorite,
+          isHidden: playlist.isHidden,
+          isShared: true,
+          sharedBy: sharedBy,
+        ),
+      );
+    }
+
+    for (final entry in sharedTree.playlistChildIds.entries) {
+      final parentId = idMap[entry.key];
+      if (parentId == null) {
+        continue;
+      }
+      final mappedChildren = entry.value
+          .map((childId) => idMap[childId])
+          .whereType<String>()
+          .toList();
+      repository.playlistChildIds[parentId] = mappedChildren;
+    }
+
+    final mappedRoots = sharedTree.rootOrder
+        .map((rootId) => idMap[rootId])
+        .whereType<String>()
+        .toList();
+    if (mappedRoots.isNotEmpty) {
+      repository.playlistChildIds[wrapperId] = mappedRoots;
+    }
+
+    for (final entry in sharedTree.videosByPlaylist.entries) {
+      final newId = idMap[entry.key];
+      if (newId == null) {
+        continue;
+      }
+      _sharedVideoCache[newId] = entry.value
+          .map(
+            (video) => VideoItem(
+              playlistItemId: '',
+              playlistId: newId,
+              videoId: video.videoId,
+              title: video.title,
+              thumbnailUrl: video.thumbnailUrl,
+            ),
+          )
+          .toList();
+    }
+
+    await storage.save(repository);
+    await storage.saveSharedVideos(
+      _sharedVideoCache.map(
+        (key, value) => MapEntry(
+          key,
+          value.map((video) => video.toMap()).toList(),
+        ),
+      ),
+    );
+    notifyListeners();
+  }
+
+  Future<Map<String, dynamic>> buildTreeExportWithVideos({
+    required String name,
+    List<String>? rootIds,
+  }) async {
+    final export = buildTreeExport(name: name, rootIds: rootIds);
+    export['sharedBy'] = signedInEmail ?? '';
+    if (_youtubeService == null) {
+      export['videosByPlaylist'] = <String, List<Map<String, dynamic>>>{};
+      return export;
+    }
+    final playlists = (export['playlists'] as List?)
+            ?.whereType<Map>()
+            .map((entry) => entry['id']?.toString())
+            .whereType<String>()
+            .toList() ??
+        <String>[];
+    for (final playlistId in playlists) {
+      await loadPlaylistVideos(playlistId);
+    }
+    final videosByPlaylist = <String, List<Map<String, dynamic>>>{};
+    for (final playlistId in playlists) {
+      final videos = _videoCache[playlistId] ?? <VideoItem>[];
+      if (videos.isEmpty) {
+        continue;
+      }
+      videosByPlaylist[playlistId] = videos
+          .map(
+            (video) => {
+              'videoId': video.videoId,
+              'title': video.title,
+              'thumbnailUrl': video.thumbnailUrl,
+            },
+          )
+          .toList();
+    }
+    export['videosByPlaylist'] = videosByPlaylist;
+    return export;
   }
 
   Future<void> connect() async {
@@ -103,11 +311,17 @@ class AppController extends ChangeNotifier {
           isPinned: playlist.isPinned,
           isFavorite: playlist.isFavorite,
           isHidden: true,
+          isShared: playlist.isShared,
+          sharedBy: playlist.sharedBy,
         );
       }).toList();
-      repository.replacePlaylists(mapped);
+      final localPlaylists =
+          repository.playlists.where((playlist) => !playlist.isYouTube).toList();
+      repository.replacePlaylists([...mapped, ...localPlaylists]);
       await storage.save(repository);
+      _setQuotaExceeded(false);
     } catch (error) {
+      _setQuotaExceeded(_isQuotaExceededError(error));
       debugPrint('YouTube sync failed: $error');
     } finally {
       _setBusy(false);
@@ -196,6 +410,18 @@ class AppController extends ChangeNotifier {
         }
       }
       repository.removePlaylists(playlistIds);
+      for (final id in playlistIds) {
+        _sharedVideoCache.remove(id);
+        _videoCache.remove(id);
+      }
+      await storage.saveSharedVideos(
+        _sharedVideoCache.map(
+          (key, value) => MapEntry(
+            key,
+            value.map((video) => video.toMap()).toList(),
+          ),
+        ),
+      );
       await storage.save(repository);
     } finally {
       _setBusy(false);
@@ -274,6 +500,15 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> loadPlaylistVideos(String playlistId) async {
+    if (_sharedVideoCache.containsKey(playlistId)) {
+      _videoCache[playlistId] = _sharedVideoCache[playlistId] ?? <VideoItem>[];
+      repository.updateVideoCount(
+        playlistId,
+        _videoCache[playlistId]?.length ?? 0,
+      );
+      notifyListeners();
+      return;
+    }
     if (_youtubeService == null) {
       _videoCache[playlistId] = <VideoItem>[];
       repository.updateVideoCount(playlistId, 0);
@@ -290,7 +525,9 @@ class AppController extends ChangeNotifier {
       final videos = items.map((item) => _mapVideo(item)).toList();
       _videoCache[playlistId] = videos;
       repository.updateVideoCount(playlistId, videos.length);
+      _setQuotaExceeded(false);
     } catch (error) {
+      _setQuotaExceeded(_isQuotaExceededError(error));
       debugPrint('YouTube playlist items failed: $error');
     } finally {
       _loadingVideos.remove(playlistId);
@@ -371,6 +608,9 @@ class AppController extends ChangeNotifier {
     if (_youtubeService == null || _searchLoading) {
       return;
     }
+    if (_quotaExceeded) {
+      return;
+    }
     final playlists = repository.playlists;
     if (playlists.isEmpty) {
       return;
@@ -383,6 +623,9 @@ class AppController extends ChangeNotifier {
         final playlistId = playlists[i].id;
         if (!_videoCache.containsKey(playlistId)) {
           await loadPlaylistVideos(playlistId);
+        }
+        if (_quotaExceeded) {
+          break;
         }
         _searchProgress = (i + 1) / playlists.length;
         notifyListeners();
@@ -406,6 +649,21 @@ class AppController extends ChangeNotifier {
   void _setBusy(bool value) {
     _busy = value;
     notifyListeners();
+  }
+
+  void _setQuotaExceeded(bool value) {
+    if (_quotaExceeded == value) {
+      return;
+    }
+    _quotaExceeded = value;
+    notifyListeners();
+  }
+
+  bool _isQuotaExceededError(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('quota') ||
+        message.contains('quotaexceeded') ||
+        message.contains('exceeded your');
   }
 
   Playlist _mapPlaylist(yt.Playlist playlist) {
@@ -439,13 +697,16 @@ class AppController extends ChangeNotifier {
     _youtubeService = null;
     _busy = false;
     _videoCache.clear();
+    _sharedVideoCache.clear();
     _loadingVideos.clear();
     _searchLoading = false;
     _searchProgress = 0;
+    _quotaExceeded = false;
     repository.replacePlaylists(<Playlist>[]);
     repository.rootOrder.clear();
     repository.playlistChildIds.clear();
     await storage.save(repository);
+    await storage.saveSharedVideos(<String, List<Map<String, dynamic>>>{});
     notifyListeners();
   }
 }

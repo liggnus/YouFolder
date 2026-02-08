@@ -8,6 +8,7 @@ class AppStorage {
   static const String keyPlaylists = 'playlists';
   static const String keyPlaylistChildIds = 'playlistChildIds';
   static const String keyRootOrder = 'rootOrder';
+  static const String keySharedVideos = 'sharedVideos';
 
   Future<AppRepository> load() async {
     final box = await Hive.openBox(boxName);
@@ -28,6 +29,20 @@ class AppStorage {
     );
   }
 
+  Map<String, List<Map<dynamic, dynamic>>> loadSharedVideos() {
+    final box = Hive.box(boxName);
+    final raw = box.get(keySharedVideos);
+    if (raw is Map) {
+      return raw.map(
+        (key, value) => MapEntry(
+          key.toString(),
+          value is List ? value.whereType<Map>().toList() : <Map<dynamic, dynamic>>[],
+        ),
+      );
+    }
+    return <String, List<Map<dynamic, dynamic>>>{};
+  }
+
   Future<void> save(AppRepository repository) async {
     final box = await Hive.openBox(boxName);
     await box.put(
@@ -36,6 +51,13 @@ class AppStorage {
     );
     await box.put(keyPlaylistChildIds, repository.playlistChildIds);
     await box.put(keyRootOrder, repository.rootOrder);
+  }
+
+  Future<void> saveSharedVideos(
+    Map<String, List<Map<String, dynamic>>> sharedVideos,
+  ) async {
+    final box = await Hive.openBox(boxName);
+    await box.put(keySharedVideos, sharedVideos);
   }
 
   List<Playlist> _readPlaylists(dynamic raw) {

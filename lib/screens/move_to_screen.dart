@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../controllers/app_controller.dart';
+import '../models/playlist.dart';
 import '../widgets/example_ad_banner.dart';
+import '../widgets/home_folder_icon.dart';
 
 class MoveToScreen extends StatefulWidget {
   const MoveToScreen({
@@ -104,17 +106,6 @@ class _MoveToScreenState extends State<MoveToScreen> {
 
   String? get _currentParentId => _path.isEmpty ? null : _path.last;
 
-  String _pathLabel() {
-    if (_path.isEmpty) {
-      return 'Root';
-    }
-    final labels = _path.map((id) {
-      final playlist = widget.controller.repository.playlistById(id);
-      return playlist?.title ?? 'Unknown';
-    }).toList();
-    return 'Root > ${labels.join(' > ')}';
-  }
-
   void _enterFolder(String playlistId) {
     setState(() => _path.add(playlistId));
   }
@@ -123,6 +114,22 @@ class _MoveToScreenState extends State<MoveToScreen> {
     if (_path.isNotEmpty) {
       setState(() => _path.removeLast());
     }
+  }
+
+  void _goRoot() {
+    if (_path.isNotEmpty) {
+      setState(_path.clear);
+    }
+  }
+
+  void _jumpTo(String playlistId) {
+    final index = _path.indexOf(playlistId);
+    if (index == -1) {
+      return;
+    }
+    setState(() {
+      _path.removeRange(index + 1, _path.length);
+    });
   }
 
   @override
@@ -147,16 +154,21 @@ class _MoveToScreenState extends State<MoveToScreen> {
             controller: _scrollController,
             child: ListView(
               controller: _scrollController,
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(16, 11, 16, 16),
               children: [
               if (widget.controller.isBusy) ...[
                 const LinearProgressIndicator(),
                 const SizedBox(height: 16),
               ],
-              Text(
-                _pathLabel(),
-                style: Theme.of(context).textTheme.bodySmall,
+              _Breadcrumbs(
+                path: _path
+                    .map((id) => repository.playlistById(id))
+                    .whereType<Playlist>()
+                    .toList(),
+                onRootTap: _goRoot,
+                onSegmentTap: (playlist) => _jumpTo(playlist.id),
               ),
+              const SizedBox(height: 6),
               const SizedBox(height: 12),
               if (_path.isNotEmpty)
                 _FolderTile(
@@ -175,6 +187,7 @@ class _MoveToScreenState extends State<MoveToScreen> {
                     subtitle:
                         '${repository.childPlaylists(playlist.id).length} playlists',
                     icon: Icons.folder_outlined,
+                    iconSize: 40,
                     disabled: isExcluded,
                     onTap: () => _enterFolder(playlist.id),
                   );
@@ -226,6 +239,7 @@ class _FolderTile extends StatelessWidget {
     required this.title,
     required this.subtitle,
     required this.icon,
+    this.iconSize = 24,
     this.disabled = false,
     required this.onTap,
   });
@@ -233,6 +247,7 @@ class _FolderTile extends StatelessWidget {
   final String title;
   final String subtitle;
   final IconData icon;
+  final double iconSize;
   final bool disabled;
   final VoidCallback onTap;
 
@@ -241,12 +256,70 @@ class _FolderTile extends StatelessWidget {
     return Material(
       borderRadius: BorderRadius.circular(12),
       child: ListTile(
-        leading: Icon(icon),
+        minLeadingWidth: 56,
+        contentPadding: const EdgeInsets.fromLTRB(0, 8, 0, 8),
+        titleAlignment: ListTileTitleAlignment.center,
+        leading: SizedBox(
+          width: 56,
+          height: 56,
+          child: Center(
+            child: Icon(icon, size: iconSize),
+          ),
+        ),
         title: Text(title),
         subtitle: Text(subtitle),
         enabled: !disabled,
         onTap: disabled ? null : onTap,
       ),
+    );
+  }
+}
+
+class _Breadcrumbs extends StatelessWidget {
+  const _Breadcrumbs({
+    required this.path,
+    required this.onRootTap,
+    required this.onSegmentTap,
+  });
+
+  final List<Playlist> path;
+  final VoidCallback onRootTap;
+  final ValueChanged<Playlist> onSegmentTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final items = <Widget>[
+      Tooltip(
+        message: 'Root',
+        child: TextButton(
+          onPressed: onRootTap,
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
+            minimumSize: Size.zero,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          child: const HomeFolderIcon(),
+        ),
+      ),
+    ];
+    for (final playlist in path) {
+      items.add(const Text(' > '));
+      items.add(
+        TextButton(
+          onPressed: () => onSegmentTap(playlist),
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
+            minimumSize: Size.zero,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          child: Text(playlist.title),
+        ),
+      );
+    }
+
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: items,
     );
   }
 }

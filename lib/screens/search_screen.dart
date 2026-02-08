@@ -1,4 +1,9 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../controllers/app_controller.dart';
@@ -19,17 +24,19 @@ class SearchScreen extends StatefulWidget {
 
 class _SearchScreenState extends State<SearchScreen> {
   final Set<String> _selectedPlaylistIds = <String>{};
+  final Set<String> _selectedVideoItemIds = <String>{};
   String _query = '';
   final ScrollController _scrollController = ScrollController();
 
-  bool get _isSelecting => _selectedPlaylistIds.isNotEmpty;
+  bool get _isSelecting =>
+      _selectedPlaylistIds.isNotEmpty || _selectedVideoItemIds.isNotEmpty;
+
+  bool get _isSelectingVideos =>
+      _selectedVideoItemIds.isNotEmpty && _selectedPlaylistIds.isEmpty;
 
   @override
   void initState() {
     super.initState();
-    if (widget.controller.isSignedIn) {
-      Future.microtask(widget.controller.preloadAllVideos);
-    }
   }
 
   @override
@@ -38,7 +45,10 @@ class _SearchScreenState extends State<SearchScreen> {
     super.dispose();
   }
 
-  void _toggleSelection(String playlistId) {
+  void _togglePlaylistSelection(String playlistId) {
+    if (_selectedVideoItemIds.isNotEmpty) {
+      setState(_selectedVideoItemIds.clear);
+    }
     setState(() {
       if (_selectedPlaylistIds.contains(playlistId)) {
         _selectedPlaylistIds.remove(playlistId);
@@ -48,13 +58,31 @@ class _SearchScreenState extends State<SearchScreen> {
     });
   }
 
+  void _toggleVideoSelection(String playlistItemId) {
+    if (_selectedPlaylistIds.isNotEmpty) {
+      setState(_selectedPlaylistIds.clear);
+    }
+    setState(() {
+      if (_selectedVideoItemIds.contains(playlistItemId)) {
+        _selectedVideoItemIds.remove(playlistItemId);
+      } else {
+        _selectedVideoItemIds.add(playlistItemId);
+      }
+    });
+  }
+
   void _clearSelection() {
-    setState(() => _selectedPlaylistIds.clear());
+    setState(() {
+      _selectedPlaylistIds.clear();
+      _selectedVideoItemIds.clear();
+    });
   }
 
   void _handleSelectionAction(String value) {
     if (value == 'delete') {
       _deleteSelected();
+    } else if (value == 'share') {
+      _shareSelectedBranches();
     } else if (value == 'pin') {
       _togglePinnedSelected();
     } else if (value == 'favorite') {
@@ -69,6 +97,18 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 
   List<PopupMenuEntry<String>> _selectionMenuItems() {
+    if (_isSelectingVideos) {
+      return const [
+        PopupMenuItem(
+          value: 'delete',
+          child: Text('Delete'),
+        ),
+        PopupMenuItem(
+          value: 'move',
+          child: Text('Move to'),
+        ),
+      ];
+    }
     final anyUnpinned = _selectedPlaylistIds.any((id) {
       final playlist = widget.controller.repository.playlistById(id);
       return playlist?.isPinned != true;
@@ -86,17 +126,9 @@ class _SearchScreenState extends State<SearchScreen> {
         value: 'delete',
         child: Text('Delete'),
       ),
-      PopupMenuItem(
-        value: 'pin',
-        child: Text(anyUnpinned ? 'Pin' : 'Unpin'),
-      ),
-      PopupMenuItem(
-        value: 'favorite',
-        child: Text(anyNotFav ? 'Favorite' : 'Unfavorite'),
-      ),
-      PopupMenuItem(
-        value: 'hide',
-        child: Text(anyVisible ? 'Hide' : 'Unhide'),
+      const PopupMenuItem(
+        value: 'move',
+        child: Text('Move to'),
       ),
       if (_selectedPlaylistIds.length == 1)
         const PopupMenuItem(
@@ -104,10 +136,43 @@ class _SearchScreenState extends State<SearchScreen> {
           child: Text('Rename'),
         ),
       const PopupMenuItem(
-        value: 'move',
-        child: Text('Move to'),
+        value: 'share',
+        child: Text('Share'),
+      ),
+      PopupMenuItem(
+        value: 'hide',
+        child: Text(anyVisible ? 'Hide' : 'Unhide'),
+      ),
+      PopupMenuItem(
+        value: 'favorite',
+        child: Text(anyNotFav ? 'Favorite' : 'Unfavorite'),
+      ),
+      PopupMenuItem(
+        value: 'pin',
+        child: Text(anyUnpinned ? 'Pin' : 'Unpin'),
       ),
     ];
+  }
+
+  Future<void> _shareSelectedBranches() async {
+    if (_selectedPlaylistIds.isEmpty) {
+      return;
+    }
+    final export = await widget.controller.buildTreeExportWithVideos(
+      name: 'Shared branch',
+      rootIds: _selectedPlaylistIds.toList(),
+    );
+    await _shareExport(export, 'youfolder-branch.json');
+  }
+
+  Future<void> _shareExport(
+    Map<String, dynamic> export,
+    String fileName,
+  ) async {
+    final dir = await getTemporaryDirectory();
+    final file = File('${dir.path}/$fileName');
+    await file.writeAsString(const JsonEncoder.withIndent('  ').convert(export));
+    await Share.shareXFiles([XFile(file.path)]);
   }
 
   Future<void> _togglePinnedSelected() async {
@@ -197,30 +262,89 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 
   Future<void> _deleteSelected() async {
-    final ids = _selectedPlaylistIds.toList();
-    await widget.controller.deletePlaylists(ids);
+    if (_isSelectingVideos) {
+      final selectedIds = _selectedVideoItemIds.toSet();
+      final allVideos = widget.controller.allCachedVideos();
+      final byPlaylist = <String, List<String>>{};
+      for (final video in allVideos) {
+        if (!selectedIds.contains(video.playlistItemId)) {
+          continue;
+        }
+        byPlaylist
+            .putIfAbsent(video.playlistId, () => <String>[])
+            .add(video.playlistItemId);
+      }
+      for (final entry in byPlaylist.entries) {
+        await widget.controller.deletePlaylistItems(entry.key, entry.value);
+      }
+    } else {
+      final ids = _selectedPlaylistIds.toList();
+      await widget.controller.deletePlaylists(ids);
+    }
     if (mounted) {
       _clearSelection();
     }
   }
 
+
   Future<void> _moveSelected() async {
-    final ids = _selectedPlaylistIds.toList();
-    final result = await Navigator.push<String?>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => MoveToScreen(
-          controller: widget.controller,
-          excludePlaylistIds: ids,
-          initialParentId: null,
+    if (_isSelectingVideos) {
+      final selectedIds = _selectedVideoItemIds.toSet();
+      final items = widget.controller
+          .allCachedVideos()
+          .where((video) => selectedIds.contains(video.playlistItemId))
+          .toList();
+      final result = await Navigator.push<String?>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => MoveToScreen(
+            controller: widget.controller,
+            excludePlaylistIds: const [],
+            initialParentId: null,
+          ),
         ),
-      ),
-    );
-    if (!mounted || result == null) {
-      return;
+      );
+      if (!mounted || result == null) {
+        return;
+      }
+      final targetId = result == '__root__' ? null : result;
+      if (targetId == null) {
+        return;
+      }
+      final itemsByPlaylist = <String, List<VideoItem>>{};
+      for (final item in items) {
+        itemsByPlaylist
+            .putIfAbsent(item.playlistId, () => <VideoItem>[])
+            .add(item);
+      }
+      for (final entry in itemsByPlaylist.entries) {
+        if (entry.key == targetId) {
+          continue;
+        }
+        await widget.controller.movePlaylistItems(
+          entry.key,
+          targetId,
+          entry.value,
+        );
+      }
+    } else {
+      final ids = _selectedPlaylistIds.toList();
+      final result = await Navigator.push<String?>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => MoveToScreen(
+            controller: widget.controller,
+            excludePlaylistIds: ids,
+            initialParentId: null,
+          ),
+        ),
+      );
+      if (!mounted || result == null) {
+        return;
+      }
+      final targetId = result == '__root__' ? null : result;
+      await widget.controller.movePlaylistsToFolder(ids, targetId);
     }
-    final targetId = result == '__root__' ? null : result;
-    await widget.controller.movePlaylistsToFolder(ids, targetId);
     if (mounted) {
       _clearSelection();
     }
@@ -281,7 +405,9 @@ class _SearchScreenState extends State<SearchScreen> {
                   )
                 : null,
             title: _isSelecting
-                ? Text('${_selectedPlaylistIds.length} selected')
+                ? Text(
+                    '${_selectedPlaylistIds.length + _selectedVideoItemIds.length} selected',
+                  )
                 : const Text('Search'),
             actions: _isSelecting
                 ? [
@@ -301,7 +427,7 @@ class _SearchScreenState extends State<SearchScreen> {
             controller: _scrollController,
             child: ListView(
               controller: _scrollController,
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(16, 11, 16, 16),
               children: [
                 if (widget.controller.isSearchLoading) ...[
                   LinearProgressIndicator(
@@ -309,6 +435,12 @@ class _SearchScreenState extends State<SearchScreen> {
                   ),
                   const SizedBox(height: 12),
                   const Text('Indexing videos...'),
+                  const SizedBox(height: 12),
+                ],
+                if (widget.controller.isQuotaExceeded) ...[
+                  _QuotaBanner(
+                    onRetry: widget.controller.preloadAllVideos,
+                  ),
                   const SizedBox(height: 12),
                 ],
                 TextField(
@@ -342,14 +474,22 @@ class _SearchScreenState extends State<SearchScreen> {
                             final selected =
                                 _selectedPlaylistIds.contains(playlist.id);
                             return ListTile(
-                              leading: selected
-                                  ? Icon(
-                                      Icons.check_circle,
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .primary,
-                                    )
-                                  : const Icon(Icons.folder_outlined),
+                              minLeadingWidth: 56,
+                              contentPadding:
+                                  const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                              titleAlignment: ListTileTitleAlignment.center,
+                              leading: SizedBox(
+                                width: 56,
+                                height: 56,
+                                child: Center(
+                                  child: Icon(
+                                    selected
+                                        ? Icons.folder
+                                        : Icons.folder_outlined,
+                                    size: 40,
+                                  ),
+                                ),
+                              ),
                               title: Text(playlist.title),
                               trailing: !_isSelecting && playlist.isHidden
                                   ? IconButton(
@@ -363,7 +503,7 @@ class _SearchScreenState extends State<SearchScreen> {
                                   : null,
                               onTap: () {
                                 if (_isSelecting) {
-                                  _toggleSelection(playlist.id);
+                                  _togglePlaylistSelection(playlist.id);
                                   return;
                                 }
                                 Navigator.push(
@@ -373,10 +513,11 @@ class _SearchScreenState extends State<SearchScreen> {
                                       controller: widget.controller,
                                       playlist: playlist,
                                     ),
-                                  ),
-                                );
-                              },
-                              onLongPress: () => _toggleSelection(playlist.id),
+                                    ),
+                                  );
+                                },
+                              onLongPress: () =>
+                                  _togglePlaylistSelection(playlist.id),
                               tileColor:
                                   selected ? Colors.grey.shade200 : null,
                             );
@@ -395,14 +536,20 @@ class _SearchScreenState extends State<SearchScreen> {
                         final selected =
                             _selectedPlaylistIds.contains(playlist.id);
                         return ListTile(
-                          leading: selected
-                              ? Icon(
-                                  Icons.check_circle,
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .primary,
-                                )
-                              : const Icon(Icons.folder_outlined),
+                          minLeadingWidth: 56,
+                          contentPadding:
+                              const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                          titleAlignment: ListTileTitleAlignment.center,
+                          leading: SizedBox(
+                            width: 56,
+                            height: 56,
+                            child: Center(
+                              child: Icon(
+                                selected ? Icons.folder : Icons.folder_outlined,
+                                size: 40,
+                              ),
+                            ),
+                          ),
                           title: Text(playlist.title),
                           trailing: !_isSelecting && playlist.isHidden
                               ? IconButton(
@@ -416,7 +563,7 @@ class _SearchScreenState extends State<SearchScreen> {
                               : null,
                           onTap: () {
                             if (_isSelecting) {
-                              _toggleSelection(playlist.id);
+                              _togglePlaylistSelection(playlist.id);
                               return;
                             }
                             Navigator.push(
@@ -426,10 +573,11 @@ class _SearchScreenState extends State<SearchScreen> {
                                   controller: widget.controller,
                                   playlist: playlist,
                                 ),
-                              ),
-                            );
-                          },
-                          onLongPress: () => _toggleSelection(playlist.id),
+                                ),
+                              );
+                            },
+                          onLongPress: () =>
+                              _togglePlaylistSelection(playlist.id),
                           tileColor: selected ? Colors.grey.shade200 : null,
                         );
                       },
@@ -442,10 +590,21 @@ class _SearchScreenState extends State<SearchScreen> {
                   if (hasVideos)
                     ...filteredVideos.map(
                       (video) {
+                        final selected = _selectedVideoItemIds
+                            .contains(video.playlistItemId);
                         return ListTile(
                           leading: _Thumbnail(url: video.thumbnailUrl),
                           title: Text(video.title),
-                          onTap: () => _openVideo(video),
+                          tileColor: selected ? Colors.grey.shade200 : null,
+                          onTap: () {
+                            if (_isSelecting) {
+                              _toggleVideoSelection(video.playlistItemId);
+                            } else {
+                              _openVideo(video);
+                            }
+                          },
+                          onLongPress: () =>
+                              _toggleVideoSelection(video.playlistItemId),
                         );
                       },
                     ),
@@ -490,6 +649,43 @@ class _Thumbnail extends StatelessWidget {
         width: 56,
         height: 56,
         fit: BoxFit.cover,
+      ),
+    );
+  }
+}
+
+class _QuotaBanner extends StatelessWidget {
+  const _QuotaBanner({required this.onRetry});
+
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: scheme.errorContainer,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.warning_amber_outlined, color: scheme.onErrorContainer),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'YouTube API quota exceeded. Video lists may be empty until quota resets.',
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: scheme.onErrorContainer),
+            ),
+          ),
+          TextButton(
+            onPressed: onRetry,
+            child: const Text('Retry'),
+          ),
+        ],
       ),
     );
   }

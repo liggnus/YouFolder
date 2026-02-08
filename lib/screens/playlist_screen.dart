@@ -1,4 +1,9 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../controllers/app_controller.dart';
@@ -26,6 +31,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
   final Set<String> _selectedVideoItemIds = <String>{};
   final Set<String> _selectedChildPlaylistIds = <String>{};
   bool _reorderMode = false;
+  bool _deleteMode = false;
   final ScrollController _scrollController = ScrollController();
 
   bool get _isSelecting =>
@@ -69,6 +75,33 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
       _selectedVideoItemIds.clear();
       _selectedChildPlaylistIds.clear();
     });
+  }
+
+  void _enterDeleteMode() {
+    setState(() {
+      _deleteMode = true;
+      _reorderMode = false;
+      _selectedVideoItemIds.clear();
+      _selectedChildPlaylistIds.clear();
+    });
+  }
+
+  void _exitDeleteMode() {
+    setState(() {
+      _deleteMode = false;
+      _selectedVideoItemIds.clear();
+      _selectedChildPlaylistIds.clear();
+    });
+  }
+
+  Future<void> _confirmDelete() async {
+    if (!_isSelecting) {
+      return;
+    }
+    await _deleteSelected();
+    if (mounted) {
+      setState(() => _deleteMode = false);
+    }
   }
 
   void _toggleReorderMode() {
@@ -135,6 +168,8 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
   void _handleSelectionAction(String value) {
     if (value == 'delete') {
       _deleteSelected();
+    } else if (value == 'share') {
+      _shareSelectedBranches();
     } else if (value == 'pin') {
       _togglePinnedSelected();
     } else if (value == 'favorite') {
@@ -173,31 +208,65 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
         final playlist = widget.controller.repository.playlistById(id);
         return playlist?.isHidden != true;
       });
-      items.insertAll(
-        1,
-        [
-          PopupMenuItem(
-            value: 'pin',
-            child: Text(anyUnpinned ? 'Pin' : 'Unpin'),
+      items
+        ..addAll(
+          _selectedChildPlaylistIds.length == 1
+              ? const [
+                  PopupMenuItem(
+                    value: 'rename',
+                    child: Text('Rename'),
+                  ),
+                ]
+              : const [],
+        )
+        ..add(
+          const PopupMenuItem(
+            value: 'share',
+            child: Text('Share'),
           ),
-          PopupMenuItem(
-            value: 'favorite',
-            child: Text(anyNotFav ? 'Favorite' : 'Unfavorite'),
-          ),
+        )
+        ..add(
           PopupMenuItem(
             value: 'hide',
             child: Text(anyVisible ? 'Hide' : 'Unhide'),
           ),
-          if (_selectedChildPlaylistIds.length == 1)
-            const PopupMenuItem(
-              value: 'rename',
-              child: Text('Rename'),
-            ),
-        ],
-      );
+        )
+        ..add(
+          PopupMenuItem(
+            value: 'favorite',
+            child: Text(anyNotFav ? 'Favorite' : 'Unfavorite'),
+          ),
+        )
+        ..add(
+          PopupMenuItem(
+            value: 'pin',
+            child: Text(anyUnpinned ? 'Pin' : 'Unpin'),
+          ),
+        );
     }
 
     return items;
+  }
+
+  Future<void> _shareSelectedBranches() async {
+    if (!_isSelectingPlaylists) {
+      return;
+    }
+    final export = await widget.controller.buildTreeExportWithVideos(
+      name: 'Shared branch',
+      rootIds: _selectedChildPlaylistIds.toList(),
+    );
+    await _shareExport(export, 'youfolder-branch.json');
+  }
+
+  Future<void> _shareExport(
+    Map<String, dynamic> export,
+    String fileName,
+  ) async {
+    final dir = await getTemporaryDirectory();
+    final file = File('${dir.path}/$fileName');
+    await file.writeAsString(const JsonEncoder.withIndent('  ').convert(export));
+    await Share.shareXFiles([XFile(file.path)]);
   }
 
   Future<void> _deleteSelected() async {
@@ -212,6 +281,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
       _clearSelection();
     }
   }
+
 
   Future<void> _togglePinnedSelected() async {
     if (_selectedChildPlaylistIds.isEmpty) {
@@ -363,6 +433,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     });
   }
 
+
   Future<void> _openVideo(String videoId) async {
     if (videoId.isEmpty) {
       return;
@@ -390,85 +461,145 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
 
         return Scaffold(
           appBar: AppBar(
-            leading: _isSelecting
+            leading: _deleteMode
                 ? IconButton(
-                    tooltip: 'Cancel selection',
-                    onPressed: _clearSelection,
+                    tooltip: 'Cancel delete',
+                    onPressed: _exitDeleteMode,
                     icon: const Icon(Icons.close),
                   )
-                : null,
+                : _isSelecting
+                    ? IconButton(
+                        tooltip: 'Cancel selection',
+                        onPressed: _clearSelection,
+                        icon: const Icon(Icons.close),
+                      )
+                    : null,
             title: Text(
-              _isSelecting
-                  ? '${_selectedVideoItemIds.length + _selectedChildPlaylistIds.length} selected'
-                  : widget.playlist.title,
+              _deleteMode
+                  ? _isSelecting
+                      ? '${_selectedVideoItemIds.length + _selectedChildPlaylistIds.length} selected'
+                      : 'Select folders or videos'
+                  : _isSelecting
+                      ? '${_selectedVideoItemIds.length + _selectedChildPlaylistIds.length} selected'
+                      : widget.playlist.title,
             ),
-            actions: _isSelecting
+            actions: _deleteMode
                 ? [
-                    PopupMenuButton<String>(
-                      tooltip: 'Actions',
-                      onSelected: _handleSelectionAction,
-                      itemBuilder: (context) => _selectionMenuItems(),
-                      icon: const Icon(Icons.more_vert),
+                    IconButton(
+                      tooltip: 'Confirm delete',
+                      onPressed: _isSelecting ? _confirmDelete : null,
+                      icon: const Icon(Icons.check),
                     ),
                   ]
-                : [
-                    IconButton(
-                      tooltip: 'Search',
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) =>
-                                SearchScreen(controller: widget.controller),
+                : _isSelecting
+                    ? [
+                        PopupMenuButton<String>(
+                          tooltip: 'Actions',
+                          onSelected: _handleSelectionAction,
+                          itemBuilder: (context) => _selectionMenuItems(),
+                          icon: const Icon(Icons.more_vert),
+                        ),
+                      ]
+                    : [
+                        IconButton(
+                          tooltip: 'Search',
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) =>
+                                    SearchScreen(controller: widget.controller),
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.search),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 36,
+                            minHeight: 36,
                           ),
-                        );
-                      },
-                      icon: const Icon(Icons.search),
-                    ),
-                    PopupMenuButton<String>(
-                      tooltip: 'Account',
-                      onSelected: (value) {
-                        if (value == 'switch') {
-                          widget.controller.switchAccount();
-                        } else if (value == 'signout') {
-                          widget.controller.signOut();
-                        }
-                      },
-                      itemBuilder: (context) => const [
-                        PopupMenuItem(
-                          value: 'switch',
-                          child: Text('Switch account'),
+                          visualDensity: VisualDensity.compact,
                         ),
-                        PopupMenuItem(
-                          value: 'signout',
-                          child: Text('Sign out'),
+                        PopupMenuButton<String>(
+                          tooltip: 'Account',
+                          onSelected: (value) async {
+                            if (value == 'switch') {
+                              widget.controller.switchAccount();
+                            } else if (value == 'signout') {
+                              final navigator = Navigator.of(context);
+                              await widget.controller.signOut();
+                              if (!mounted) {
+                                return;
+                              }
+                              navigator.popUntil(
+                                (route) => route.isFirst,
+                              );
+                            }
+                          },
+                          itemBuilder: (context) => const [
+                            PopupMenuItem(
+                              value: 'switch',
+                              child: Text('Switch account'),
+                            ),
+                            PopupMenuItem(
+                              value: 'signout',
+                              child: Text('Sign out'),
+                            ),
+                          ],
+                          icon: const Icon(Icons.account_circle_outlined),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 36,
+                            minHeight: 36,
+                          ),
                         ),
+                        IconButton(
+                          tooltip: 'New folder',
+                          onPressed: widget.controller.isBusy
+                              ? null
+                              : _createChildPlaylist,
+                          icon: const Icon(Icons.add),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 36,
+                            minHeight: 36,
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        IconButton(
+                          tooltip: 'Delete',
+                          onPressed: _enterDeleteMode,
+                          icon: const Icon(Icons.delete_outline),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 36,
+                            minHeight: 36,
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        IconButton(
+                          tooltip: _reorderMode ? 'Done' : 'Reorder',
+                          onPressed: _toggleReorderMode,
+                          icon: Icon(
+                            _reorderMode ? Icons.check : Icons.swap_vert,
+                          ),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 36,
+                            minHeight: 36,
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        if (widget.playlist.isHidden)
+                          IconButton(
+                            tooltip: 'Unhide folder',
+                            onPressed: () {
+                              widget.controller
+                                  .setHidden([widget.playlist.id], false);
+                            },
+                            icon: const Icon(Icons.visibility_outlined),
+                          ),
                       ],
-                      icon: const Icon(Icons.account_circle_outlined),
-                    ),
-                    IconButton(
-                      tooltip: 'New folder',
-                      onPressed:
-                          widget.controller.isBusy ? null : _createChildPlaylist,
-                      icon: const Icon(Icons.add),
-                    ),
-                    IconButton(
-                      tooltip: _reorderMode ? 'Done' : 'Reorder',
-                      onPressed: _toggleReorderMode,
-                      icon: Icon(
-                        _reorderMode ? Icons.check : Icons.swap_vert,
-                      ),
-                    ),
-                    if (widget.playlist.isHidden)
-                      IconButton(
-                        tooltip: 'Unhide folder',
-                        onPressed: () {
-                          widget.controller
-                              .setHidden([widget.playlist.id], false);
-                        },
-                        icon: const Icon(Icons.visibility_outlined),
-                      ),
-                  ],
           ),
           body: Scrollbar(
             thumbVisibility: true,
@@ -480,7 +611,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
               slivers: [
                 SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.all(16),
+                    padding: const EdgeInsets.fromLTRB(16, 1, 16, 8),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -488,7 +619,15 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                           const LinearProgressIndicator(),
                           const SizedBox(height: 16),
                         ],
-                        const Divider(height: 12, thickness: 0.5),
+                        if (widget.controller.isQuotaExceeded) ...[
+                          _QuotaBanner(
+                            onRetry: () {
+                              widget.controller
+                                  .loadPlaylistVideos(widget.playlist.id);
+                            },
+                          ),
+                          const SizedBox(height: 12),
+                        ],
                         _Breadcrumbs(
                           path: path,
                           onRootTap: () {
@@ -510,7 +649,6 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                           },
                         ),
                         const SizedBox(height: 6),
-                        const Divider(height: 14, thickness: 0.5),
                         const SizedBox(height: 8),
                         if (_reorderMode)
                           const Padding(
@@ -547,56 +685,66 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                       return Material(
                         key: ValueKey(playlist.id),
                         color: Colors.transparent,
-                        child: ListTile(
-                          leading: _reorderMode
-                              ? ReorderableDragStartListener(
-                                  index: index,
-                                  child: const Icon(Icons.drag_handle),
-                                )
-                              : selected
-                                  ? Icon(
-                                      Icons.check_circle,
-                                      color: Theme.of(context).colorScheme.primary,
-                                    )
-                                  : const Icon(Icons.folder_outlined),
-                          title: Text(playlist.title),
-                          trailing: _buildFlags(playlist),
-                          tileColor: selected ? Colors.grey.shade200 : null,
-                          onTap: () {
-                            if (_reorderMode) {
-                              return;
-                            }
-                            if (_isSelecting) {
-                              _toggleChildPlaylistSelection(playlist.id);
-                            } else {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => PlaylistScreen(
-                                    controller: widget.controller,
-                                    playlist: playlist,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          child: ListTile(
+                            minLeadingWidth: 56,
+                            contentPadding: const EdgeInsets.fromLTRB(0, 8, 0, 8),
+                            titleAlignment: ListTileTitleAlignment.center,
+                            leading: _reorderMode
+                                ? ReorderableDragStartListener(
+                                    index: index,
+                                    child: const Icon(Icons.drag_handle),
+                                  )
+                                : SizedBox(
+                                    width: 56,
+                                    height: 56,
+                                    child: Center(
+                                      child: Icon(
+                                        selected
+                                            ? Icons.folder
+                                            : Icons.folder_outlined,
+                                        size: 40,
+                                      ),
+                                    ),
                                   ),
-                                ),
-                              );
-                            }
-                          },
-                          onLongPress: _reorderMode
-                              ? null
-                              : () => _toggleChildPlaylistSelection(playlist.id),
+                            title: Text(playlist.title),
+                            trailing: _buildFlags(playlist),
+                            tileColor: selected ? Colors.grey.shade200 : null,
+                            onTap: () {
+                              if (_reorderMode) {
+                                return;
+                              }
+                              if (_deleteMode || _isSelecting) {
+                                _toggleChildPlaylistSelection(playlist.id);
+                              } else {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => PlaylistScreen(
+                                      controller: widget.controller,
+                                      playlist: playlist,
+                                    ),
+                                  ),
+                                );
+                              }
+                            },
+                            onLongPress: _reorderMode
+                                ? null
+                                : () => _toggleChildPlaylistSelection(playlist.id),
+                          ),
                         ),
                       );
                     },
                   ),
                 if (hasChildPlaylists && hasVideos) ...[
-                  const SliverToBoxAdapter(child: SizedBox(height: 12)),
                   const SliverToBoxAdapter(
                     child: Padding(
                       padding: EdgeInsets.symmetric(horizontal: 16),
-                      child: Divider(height: 18, thickness: 0.5),
+                      child: Divider(height: 1, thickness: 0.5),
                     ),
                   ),
                 ],
-                const SliverToBoxAdapter(child: SizedBox(height: 6)),
                 if (isLoading)
                   const SliverToBoxAdapter(
                     child: Padding(
@@ -612,11 +760,13 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                         final selected = _selectedVideoItemIds
                             .contains(video.playlistItemId);
                         return ListTile(
+                          contentPadding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                          titleAlignment: ListTileTitleAlignment.center,
                           leading: _Thumbnail(url: video.thumbnailUrl),
                           title: Text(video.title),
                           tileColor: selected ? Colors.grey.shade200 : null,
                           onTap: () {
-                            if (_isSelecting) {
+                            if (_deleteMode || _isSelecting) {
                               _toggleSelection(video.playlistItemId);
                             } else {
                               _openVideo(video.videoId);
@@ -663,6 +813,11 @@ class _Breadcrumbs extends StatelessWidget {
         message: 'Root',
         child: TextButton(
           onPressed: onRootTap,
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
+            minimumSize: Size.zero,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
           child: const HomeFolderIcon(),
         ),
       ),
@@ -672,6 +827,11 @@ class _Breadcrumbs extends StatelessWidget {
       items.add(
         TextButton(
           onPressed: () => onSegmentTap(playlist),
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
+            minimumSize: Size.zero,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
           child: Text(playlist.title),
         ),
       );
@@ -709,6 +869,43 @@ class _Thumbnail extends StatelessWidget {
         width: 56,
         height: 56,
         fit: BoxFit.cover,
+      ),
+    );
+  }
+}
+
+class _QuotaBanner extends StatelessWidget {
+  const _QuotaBanner({required this.onRetry});
+
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: scheme.errorContainer,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.warning_amber_outlined, color: scheme.onErrorContainer),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'YouTube API quota exceeded. Videos may be unavailable until quota resets.',
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: scheme.onErrorContainer),
+            ),
+          ),
+          TextButton(
+            onPressed: onRetry,
+            child: const Text('Retry'),
+          ),
+        ],
       ),
     );
   }
