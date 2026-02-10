@@ -37,6 +37,12 @@ class _SearchScreenState extends State<SearchScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (widget.controller.allCachedVideos().isEmpty &&
+          !widget.controller.isSearchLoading) {
+        widget.controller.preloadAllVideos();
+      }
+    });
   }
 
   @override
@@ -409,9 +415,9 @@ class _SearchScreenState extends State<SearchScreen> {
                     '${_selectedPlaylistIds.length + _selectedVideoItemIds.length} selected',
                   )
                 : Image.asset(
-                    'assets/tube-folder1.jpg',
-                    width: 64,
-                    height: 64,
+                    'assets/tube-folder1.png',
+                    width: 70.4,
+                    height: 70.4,
                   ),
             actions: _isSelecting
                 ? [
@@ -424,196 +430,212 @@ class _SearchScreenState extends State<SearchScreen> {
                   ]
                 : null,
           ),
-          body: Scrollbar(
-            thumbVisibility: true,
-            interactive: true,
-            thickness: 6,
-            controller: _scrollController,
-            child: ListView(
+          body: RefreshIndicator(
+            onRefresh: () => widget.controller.preloadAllVideos(force: true),
+            child: Scrollbar(
+              thumbVisibility: true,
+              interactive: true,
+              thickness: 6,
               controller: _scrollController,
-              padding: const EdgeInsets.fromLTRB(16, 11, 16, 16),
-              children: [
-                if (widget.controller.isSearchLoading) ...[
-                  LinearProgressIndicator(
-                    value: widget.controller.searchProgress,
+              child: ListView(
+                controller: _scrollController,
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(16, 11, 16, 16),
+                children: [
+                  if (widget.controller.isSearchLoading) ...[
+                    LinearProgressIndicator(
+                      value: widget.controller.searchProgress,
+                    ),
+                    const SizedBox(height: 12),
+                    const Text('Indexing videos...'),
+                    const SizedBox(height: 12),
+                  ],
+                  if (widget.controller.isQuotaExceeded) ...[
+                    _QuotaBanner(
+                      onRetry: () =>
+                          widget.controller.preloadAllVideos(force: true),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  TextField(
+                    decoration: InputDecoration(
+                      hintText: 'Search playlists and videos',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: _query.isEmpty
+                          ? null
+                          : IconButton(
+                              onPressed: () {
+                                setState(() => _query = '');
+                              },
+                              icon: const Icon(Icons.clear),
+                            ),
+                    ),
+                    onChanged: (value) => setState(() => _query = value),
                   ),
                   const SizedBox(height: 12),
-                  const Text('Indexing videos...'),
-                  const SizedBox(height: 12),
-                ],
-                if (widget.controller.isQuotaExceeded) ...[
-                  _QuotaBanner(
-                    onRetry: widget.controller.preloadAllVideos,
-                  ),
-                  const SizedBox(height: 12),
-                ],
-                TextField(
-                  decoration: InputDecoration(
-                    hintText: 'Search playlists and videos',
-                    prefixIcon: const Icon(Icons.search),
-                    suffixIcon: _query.isEmpty
-                        ? null
-                        : IconButton(
-                            onPressed: () {
-                              setState(() => _query = '');
-                            },
-                            icon: const Icon(Icons.clear),
+                  if (_query.trim().isEmpty)
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (favorites.isNotEmpty) ...[
+                          Text(
+                            'Favorites',
+                            style: Theme.of(context).textTheme.titleSmall,
                           ),
-                  ),
-                  onChanged: (value) => setState(() => _query = value),
-                ),
-                const SizedBox(height: 12),
-                if (_query.trim().isEmpty)
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (favorites.isNotEmpty) ...[
-                        Text(
-                          'Favorites',
-                          style: Theme.of(context).textTheme.titleSmall,
-                        ),
-                        const SizedBox(height: 6),
-                        ...favorites.map(
-                          (playlist) {
-                            final selected =
-                                _selectedPlaylistIds.contains(playlist.id);
-                            return ListTile(
-                              minLeadingWidth: 56,
-                              contentPadding:
-                                  const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                              titleAlignment: ListTileTitleAlignment.center,
-                              leading: SizedBox(
-                                width: 56,
-                                height: 56,
-                                child: Center(
-                                  child: Icon(
-                                    selected
-                                        ? Icons.folder
-                                        : Icons.folder_outlined,
-                                    size: 40,
+                          const SizedBox(height: 6),
+                          ...favorites.map(
+                            (playlist) {
+                              final selected =
+                                  _selectedPlaylistIds.contains(playlist.id);
+                              return ListTile(
+                                minLeadingWidth: 56,
+                                contentPadding:
+                                    const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                                titleAlignment:
+                                    ListTileTitleAlignment.center,
+                                leading: SizedBox(
+                                  width: 56,
+                                  height: 56,
+                                  child: Center(
+                                    child: Icon(
+                                      selected
+                                          ? Icons.folder
+                                          : Icons.folder_outlined,
+                                      size: 40,
+                                    ),
                                   ),
                                 ),
-                              ),
-                              title: Text(playlist.title),
-                              trailing: !_isSelecting && playlist.isHidden
-                                  ? IconButton(
-                                      tooltip: 'Unhide',
-                                      onPressed: () {
-                                        widget.controller
-                                            .setHidden([playlist.id], false);
-                                      },
-                                      icon: const Icon(Icons.visibility_outlined),
-                                    )
-                                  : null,
-                              onTap: () {
-                                if (_isSelecting) {
-                                  _togglePlaylistSelection(playlist.id);
-                                  return;
-                                }
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => PlaylistScreen(
-                                      controller: widget.controller,
-                                      playlist: playlist,
-                                    ),
+                                title: Text(playlist.title),
+                                trailing: !_isSelecting && playlist.isHidden
+                                    ? IconButton(
+                                        tooltip: 'Unhide',
+                                        onPressed: () {
+                                          widget.controller
+                                              .setHidden([playlist.id], false);
+                                        },
+                                        icon: const Icon(
+                                          Icons.visibility_outlined,
+                                        ),
+                                      )
+                                    : null,
+                                onTap: () {
+                                  if (_isSelecting) {
+                                    _togglePlaylistSelection(playlist.id);
+                                    return;
+                                  }
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => PlaylistScreen(
+                                        controller: widget.controller,
+                                        playlist: playlist,
+                                      ),
                                     ),
                                   );
                                 },
-                              onLongPress: () =>
-                                  _togglePlaylistSelection(playlist.id),
-                              tileColor:
-                                  selected ? Colors.grey.shade200 : null,
-                            );
-                          },
+                                onLongPress: () =>
+                                    _togglePlaylistSelection(playlist.id),
+                                tileColor:
+                                    selected ? Colors.grey.shade200 : null,
+                              );
+                            },
+                          ),
+                          const SizedBox(height: 12),
+                        ],
+                        const Text(
+                          'Type to search your playlists and videos.',
                         ),
-                        const SizedBox(height: 12),
                       ],
-                      const Text('Type to search your playlists and videos.'),
-                    ],
-                  )
-                else ...[
-                  const SizedBox(height: 2),
-                  if (hasPlaylists)
-                    ...filteredPlaylists.map(
-                      (playlist) {
-                        final selected =
-                            _selectedPlaylistIds.contains(playlist.id);
-                        return ListTile(
-                          minLeadingWidth: 56,
-                          contentPadding:
-                              const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                          titleAlignment: ListTileTitleAlignment.center,
-                          leading: SizedBox(
-                            width: 56,
-                            height: 56,
-                            child: Center(
-                              child: Icon(
-                                selected ? Icons.folder : Icons.folder_outlined,
-                                size: 40,
+                    )
+                  else ...[
+                    const SizedBox(height: 2),
+                    if (hasPlaylists)
+                      ...filteredPlaylists.map(
+                        (playlist) {
+                          final selected =
+                              _selectedPlaylistIds.contains(playlist.id);
+                          return ListTile(
+                            minLeadingWidth: 56,
+                            contentPadding:
+                                const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                            titleAlignment:
+                                ListTileTitleAlignment.center,
+                            leading: SizedBox(
+                              width: 56,
+                              height: 56,
+                              child: Center(
+                                child: Icon(
+                                  selected
+                                      ? Icons.folder
+                                      : Icons.folder_outlined,
+                                  size: 40,
+                                ),
                               ),
                             ),
-                          ),
-                          title: Text(playlist.title),
-                          trailing: !_isSelecting && playlist.isHidden
-                              ? IconButton(
-                                  tooltip: 'Unhide',
-                                  onPressed: () {
-                                    widget.controller
-                                        .setHidden([playlist.id], false);
-                                  },
-                                  icon: const Icon(Icons.visibility_outlined),
-                                )
-                              : null,
-                          onTap: () {
-                            if (_isSelecting) {
-                              _togglePlaylistSelection(playlist.id);
-                              return;
-                            }
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => PlaylistScreen(
-                                  controller: widget.controller,
-                                  playlist: playlist,
-                                ),
+                            title: Text(playlist.title),
+                            trailing: !_isSelecting && playlist.isHidden
+                                ? IconButton(
+                                    tooltip: 'Unhide',
+                                    onPressed: () {
+                                      widget.controller
+                                          .setHidden([playlist.id], false);
+                                    },
+                                    icon: const Icon(
+                                      Icons.visibility_outlined,
+                                    ),
+                                  )
+                                : null,
+                            onTap: () {
+                              if (_isSelecting) {
+                                _togglePlaylistSelection(playlist.id);
+                                return;
+                              }
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => PlaylistScreen(
+                                    controller: widget.controller,
+                                    playlist: playlist,
+                                  ),
                                 ),
                               );
                             },
-                          onLongPress: () =>
-                              _togglePlaylistSelection(playlist.id),
-                          tileColor: selected ? Colors.grey.shade200 : null,
-                        );
-                      },
-                    ),
-                  if (hasPlaylists && hasVideos) ...[
-                    const SizedBox(height: 12),
-                    const Divider(height: 18, thickness: 0.5),
+                            onLongPress: () =>
+                                _togglePlaylistSelection(playlist.id),
+                            tileColor: selected ? Colors.grey.shade200 : null,
+                          );
+                        },
+                      ),
+                    if (hasPlaylists && hasVideos) ...[
+                      const SizedBox(height: 12),
+                      const Divider(height: 18, thickness: 0.5),
+                    ],
+                    const SizedBox(height: 6),
+                    if (hasVideos)
+                      ...filteredVideos.map(
+                        (video) {
+                          final selected = _selectedVideoItemIds
+                              .contains(video.playlistItemId);
+                          return ListTile(
+                            leading: _Thumbnail(url: video.thumbnailUrl),
+                            title: Text(video.title),
+                            tileColor:
+                                selected ? Colors.grey.shade200 : null,
+                            onTap: () {
+                              if (_isSelecting) {
+                                _toggleVideoSelection(video.playlistItemId);
+                              } else {
+                                _openVideo(video);
+                              }
+                            },
+                            onLongPress: () =>
+                                _toggleVideoSelection(video.playlistItemId),
+                          );
+                        },
+                      ),
                   ],
-                  const SizedBox(height: 6),
-                  if (hasVideos)
-                    ...filteredVideos.map(
-                      (video) {
-                        final selected = _selectedVideoItemIds
-                            .contains(video.playlistItemId);
-                        return ListTile(
-                          leading: _Thumbnail(url: video.thumbnailUrl),
-                          title: Text(video.title),
-                          tileColor: selected ? Colors.grey.shade200 : null,
-                          onTap: () {
-                            if (_isSelecting) {
-                              _toggleVideoSelection(video.playlistItemId);
-                            } else {
-                              _openVideo(video);
-                            }
-                          },
-                          onLongPress: () =>
-                              _toggleVideoSelection(video.playlistItemId),
-                        );
-                      },
-                    ),
                 ],
-              ],
+              ),
             ),
           ),
           bottomNavigationBar: const SafeArea(

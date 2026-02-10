@@ -421,9 +421,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Image.asset(
-                              'assets/tube-folder1.jpg',
-                              width: 64,
-                              height: 64,
+                              'assets/tube-folder1.png',
+                              width: 70.4,
+                              height: 70.4,
                             ),
                           ],
                         ),
@@ -549,70 +549,160 @@ class _LibraryScreenState extends State<LibraryScreen> {
                         ),
                       ],
           ),
-          body: Scrollbar(
-            thumbVisibility: true,
-            interactive: true,
-            thickness: 6,
-            controller: _scrollController,
-            child: CustomScrollView(
+          body: RefreshIndicator(
+            onRefresh: () async {
+              await widget.controller.syncPlaylists();
+            },
+            child: Scrollbar(
+              thumbVisibility: true,
+              interactive: true,
+              thickness: 6,
               controller: _scrollController,
-              slivers: [
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 1, 16, 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (widget.controller.isBusy) ...[
-                          const LinearProgressIndicator(),
-                          const SizedBox(height: 16),
-                        ],
-                        if (widget.controller.isQuotaExceeded) ...[
-                          _QuotaBanner(
-                            onRetry: widget.controller.syncPlaylists,
+              child: CustomScrollView(
+                controller: _scrollController,
+                physics: const AlwaysScrollableScrollPhysics(),
+                slivers: [
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 1, 16, 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (widget.controller.isBusy) ...[
+                            const LinearProgressIndicator(),
+                            const SizedBox(height: 16),
+                          ],
+                          if (widget.controller.isQuotaExceeded) ...[
+                            _QuotaBanner(
+                              onRetry: widget.controller.syncPlaylists,
+                            ),
+                            const SizedBox(height: 12),
+                          ],
+                          _RootBreadcrumb(
+                            onTap: () {
+                              widget.controller.syncPlaylists();
+                            },
                           ),
-                          const SizedBox(height: 12),
-                        ],
-                        _RootBreadcrumb(
-                          onTap: () {
-                            widget.controller.syncPlaylists();
-                          },
-                        ),
-                        if (sharedRoots.isNotEmpty) ...[
-                          const SizedBox(height: 8),
-                          Text(
-                            'Shared with me',
-                            style: Theme.of(context).textTheme.titleSmall,
-                          ),
-                          const SizedBox(height: 4),
-                          ...sharedRoots.map(
-                            (playlist) => ListTile(
-                              contentPadding:
-                                  const EdgeInsets.fromLTRB(0, 8, 0, 8),
-                              minLeadingWidth: 56,
-                              titleAlignment: ListTileTitleAlignment.center,
-                              leading: SizedBox(
-                                width: 56,
-                                height: 56,
-                                child: Center(
-                                  child: Icon(
-                                    _selectedPlaylistIds.contains(playlist.id)
-                                        ? Icons.folder
-                                        : Icons.folder_outlined,
-                                    size: 40,
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .onSurface,
+                          if (sharedRoots.isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              'Shared with me',
+                              style: Theme.of(context).textTheme.titleSmall,
+                            ),
+                            const SizedBox(height: 4),
+                            ...sharedRoots.map(
+                              (playlist) => ListTile(
+                                contentPadding:
+                                    const EdgeInsets.fromLTRB(0, 8, 0, 8),
+                                minLeadingWidth: 56,
+                                titleAlignment: ListTileTitleAlignment.center,
+                                leading: SizedBox(
+                                  width: 56,
+                                  height: 56,
+                                  child: Center(
+                                    child: Icon(
+                                      _selectedPlaylistIds.contains(playlist.id)
+                                          ? Icons.folder
+                                          : Icons.folder_outlined,
+                                      size: 40,
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .onSurface,
+                                    ),
                                   ),
                                 ),
+                                title: Text(playlist.title),
+                                subtitle: Text(
+                                  playlist.sharedBy == null ||
+                                          playlist.sharedBy!.isEmpty
+                                      ? 'Shared tree'
+                                      : 'Shared by ${playlist.sharedBy}',
+                                ),
+                                onTap: () {
+                                  if (_reorderMode) {
+                                    return;
+                                  }
+                                  if (_deleteMode || _isSelecting) {
+                                    _toggleSelection(playlist.id);
+                                  } else {
+                                    _openPlaylist(playlist);
+                                  }
+                                },
+                                onLongPress: _reorderMode
+                                    ? null
+                                    : () => _toggleSelection(playlist.id),
+                                tileColor: _selectedPlaylistIds
+                                        .contains(playlist.id)
+                                    ? Colors.grey.shade200
+                                    : null,
                               ),
+                            ),
+                          ],
+                          const SizedBox(height: 2),
+                          if (_reorderMode)
+                            const Padding(
+                              padding: EdgeInsets.only(bottom: 6),
+                              child: Text(
+                                'Drag the handle to reorder playlists.',
+                              ),
+                            ),
+                          const SizedBox(height: 0),
+                        ],
+                      ),
+                    ),
+                  ),
+                  if (filteredPlaylists.isNotEmpty)
+                    SliverReorderableList(
+                      itemCount: filteredPlaylists.length,
+                      onReorder: (oldIndex, newIndex) async {
+                        if (newIndex > oldIndex) {
+                          newIndex -= 1;
+                        }
+                        final normalIds = filteredPlaylists
+                            .map((playlist) => playlist.id)
+                            .toList();
+                        final moved = normalIds.removeAt(oldIndex);
+                        normalIds.insert(newIndex, moved);
+                        final sharedIds = sharedRoots
+                            .map((playlist) => playlist.id)
+                            .toList();
+                        await widget.controller
+                            .reorderRootPlaylists([...sharedIds, ...normalIds]);
+                      },
+                      itemBuilder: (context, index) {
+                        final playlist = filteredPlaylists[index];
+                        final selected =
+                            _selectedPlaylistIds.contains(playlist.id);
+                        return Material(
+                          key: ValueKey(playlist.id),
+                          color: Colors.transparent,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: ListTile(
+                              minLeadingWidth: 56,
+                              contentPadding:
+                                  const EdgeInsets.fromLTRB(0, 8, 0, 8),
+                              titleAlignment: ListTileTitleAlignment.center,
+                              leading: _reorderMode
+                                  ? ReorderableDragStartListener(
+                                      index: index,
+                                      child: const Icon(Icons.drag_handle),
+                                    )
+                                  : SizedBox(
+                                      width: 56,
+                                      height: 56,
+                                      child: Center(
+                                        child: Icon(
+                                          selected
+                                              ? Icons.folder
+                                              : Icons.folder_outlined,
+                                          size: 40,
+                                        ),
+                                      ),
+                                    ),
                               title: Text(playlist.title),
-                              subtitle: Text(
-                                playlist.sharedBy == null ||
-                                        playlist.sharedBy!.isEmpty
-                                    ? 'Shared tree'
-                                    : 'Shared by ${playlist.sharedBy}',
-                              ),
+                              trailing: _buildFlags(playlist),
+                              tileColor: selected ? Colors.grey.shade200 : null,
                               onTap: () {
                                 if (_reorderMode) {
                                   return;
@@ -626,97 +716,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
                               onLongPress: _reorderMode
                                   ? null
                                   : () => _toggleSelection(playlist.id),
-                              tileColor: _selectedPlaylistIds
-                                      .contains(playlist.id)
-                                  ? Colors.grey.shade200
-                                  : null,
                             ),
                           ),
-                        ],
-                        const SizedBox(height: 2),
-                        if (_reorderMode)
-                          const Padding(
-                            padding: EdgeInsets.only(bottom: 6),
-                            child: Text(
-                              'Drag the handle to reorder playlists.',
-                            ),
-                          ),
-                        const SizedBox(height: 0),
-                      ],
+                        );
+                      },
                     ),
-                  ),
-                ),
-                if (filteredPlaylists.isNotEmpty)
-                  SliverReorderableList(
-                    itemCount: filteredPlaylists.length,
-                    onReorder: (oldIndex, newIndex) async {
-                      if (newIndex > oldIndex) {
-                        newIndex -= 1;
-                      }
-                      final normalIds = filteredPlaylists
-                          .map((playlist) => playlist.id)
-                          .toList();
-                      final moved = normalIds.removeAt(oldIndex);
-                      normalIds.insert(newIndex, moved);
-                      final sharedIds = sharedRoots
-                          .map((playlist) => playlist.id)
-                          .toList();
-                      await widget.controller
-                          .reorderRootPlaylists([...sharedIds, ...normalIds]);
-                    },
-                    itemBuilder: (context, index) {
-                      final playlist = filteredPlaylists[index];
-                      final selected =
-                          _selectedPlaylistIds.contains(playlist.id);
-                      return Material(
-                        key: ValueKey(playlist.id),
-                        color: Colors.transparent,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          child: ListTile(
-                            minLeadingWidth: 56,
-                            contentPadding: const EdgeInsets.fromLTRB(0, 8, 0, 8),
-                            titleAlignment: ListTileTitleAlignment.center,
-                            leading: _reorderMode
-                                ? ReorderableDragStartListener(
-                                    index: index,
-                                    child: const Icon(Icons.drag_handle),
-                                  )
-                                : SizedBox(
-                                    width: 56,
-                                    height: 56,
-                                    child: Center(
-                                      child: Icon(
-                                        selected
-                                            ? Icons.folder
-                                            : Icons.folder_outlined,
-                                        size: 40,
-                                      ),
-                                    ),
-                                  ),
-                            title: Text(playlist.title),
-                            trailing: _buildFlags(playlist),
-                            tileColor: selected ? Colors.grey.shade200 : null,
-                            onTap: () {
-                              if (_reorderMode) {
-                                return;
-                              }
-                              if (_deleteMode || _isSelecting) {
-                                _toggleSelection(playlist.id);
-                              } else {
-                                _openPlaylist(playlist);
-                              }
-                            },
-                            onLongPress: _reorderMode
-                                ? null
-                                : () => _toggleSelection(playlist.id),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                const SliverToBoxAdapter(child: SizedBox(height: 8)),
-              ],
+                  const SliverToBoxAdapter(child: SizedBox(height: 8)),
+                ],
+              ),
             ),
           ),
           bottomNavigationBar: const SafeArea(

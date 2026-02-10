@@ -483,9 +483,9 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                         : '${_selectedVideoItemIds.length + _selectedChildPlaylistIds.length} selected',
                   )
                 : Image.asset(
-                    'assets/tube-folder1.jpg',
-                    width: 64,
-                    height: 64,
+                    'assets/tube-folder1.png',
+                    width: 70.4,
+                    height: 70.4,
                   ),
             actions: _deleteMode
                 ? [
@@ -605,186 +605,197 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                           ),
                       ],
           ),
-          body: Scrollbar(
-            thumbVisibility: true,
-            interactive: true,
-            thickness: 6,
-            controller: _scrollController,
-            child: CustomScrollView(
+          body: RefreshIndicator(
+            onRefresh: () async {
+              await widget.controller
+                  .loadPlaylistVideos(widget.playlist.id, force: true);
+            },
+            child: Scrollbar(
+              thumbVisibility: true,
+              interactive: true,
+              thickness: 6,
               controller: _scrollController,
-              slivers: [
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 1, 16, 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (widget.controller.isBusy) ...[
-                          const LinearProgressIndicator(),
-                          const SizedBox(height: 16),
-                        ],
-                        if (widget.controller.isQuotaExceeded) ...[
-                          _QuotaBanner(
-                            onRetry: () {
-                              widget.controller
-                                  .loadPlaylistVideos(widget.playlist.id);
-                            },
-                          ),
-                          const SizedBox(height: 12),
-                        ],
-                        _Breadcrumbs(
-                          path: path,
-                          onRootTap: () {
-                            Navigator.popUntil(
-                              context,
-                              (route) => route.isFirst,
-                            );
-                          },
-                          onSegmentTap: (playlist) {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => PlaylistScreen(
-                                  controller: widget.controller,
-                                  playlist: playlist,
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                        const SizedBox(height: 6),
-                        const SizedBox(height: 8),
-                        if (_reorderMode)
-                          const Padding(
-                            padding: EdgeInsets.only(bottom: 6),
-                            child: Text(
-                              'Drag the handle to reorder playlists.',
+              child: CustomScrollView(
+                controller: _scrollController,
+                physics: const AlwaysScrollableScrollPhysics(),
+                slivers: [
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 1, 16, 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (widget.controller.isBusy) ...[
+                            const LinearProgressIndicator(),
+                            const SizedBox(height: 16),
+                          ],
+                          if (widget.controller.isQuotaExceeded) ...[
+                            _QuotaBanner(
+                              onRetry: () {
+                                widget.controller
+                                    .loadPlaylistVideos(widget.playlist.id);
+                              },
                             ),
-                          ),
-                        const SizedBox(height: 2),
-                      ],
-                    ),
-                  ),
-                ),
-                if (hasChildPlaylists)
-                  SliverReorderableList(
-                    itemCount: filteredPlaylists.length,
-                    onReorder: (oldIndex, newIndex) async {
-                      if (newIndex > oldIndex) {
-                        newIndex -= 1;
-                      }
-                      final orderedIds =
-                          childPlaylists.map((playlist) => playlist.id).toList();
-                      final moved = orderedIds.removeAt(oldIndex);
-                      orderedIds.insert(newIndex, moved);
-                      await widget.controller.reorderChildPlaylists(
-                        widget.playlist.id,
-                        orderedIds,
-                      );
-                    },
-                    itemBuilder: (context, index) {
-                      final playlist = filteredPlaylists[index];
-                      final selected =
-                          _selectedChildPlaylistIds.contains(playlist.id);
-                      return Material(
-                        key: ValueKey(playlist.id),
-                        color: Colors.transparent,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          child: ListTile(
-                            minLeadingWidth: 56,
-                            contentPadding: const EdgeInsets.fromLTRB(0, 8, 0, 8),
-                            titleAlignment: ListTileTitleAlignment.center,
-                            leading: _reorderMode
-                                ? ReorderableDragStartListener(
-                                    index: index,
-                                    child: const Icon(Icons.drag_handle),
-                                  )
-                                : SizedBox(
-                                    width: 56,
-                                    height: 56,
-                                    child: Center(
-                                      child: Icon(
-                                        selected
-                                            ? Icons.folder
-                                            : Icons.folder_outlined,
-                                        size: 40,
-                                      ),
-                                    ),
-                                  ),
-                            title: Text(playlist.title),
-                            trailing: _buildFlags(playlist),
-                            tileColor: selected ? Colors.grey.shade200 : null,
-                            onTap: () {
-                              if (_reorderMode) {
-                                return;
-                              }
-                              if (_deleteMode || _isSelecting) {
-                                _toggleChildPlaylistSelection(playlist.id);
-                              } else {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => PlaylistScreen(
-                                      controller: widget.controller,
-                                      playlist: playlist,
-                                    ),
-                                  ),
-                                );
-                              }
+                            const SizedBox(height: 12),
+                          ],
+                          _Breadcrumbs(
+                            path: path,
+                            onRootTap: () {
+                              Navigator.popUntil(
+                                context,
+                                (route) => route.isFirst,
+                              );
                             },
-                            onLongPress: _reorderMode
-                                ? null
-                                : () => _toggleChildPlaylistSelection(playlist.id),
+                            onSegmentTap: (playlist) {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => PlaylistScreen(
+                                    controller: widget.controller,
+                                    playlist: playlist,
+                                  ),
+                                ),
+                              );
+                            },
                           ),
-                        ),
-                      );
-                    },
-                  ),
-                if (hasChildPlaylists && hasVideos) ...[
-                  const SliverToBoxAdapter(
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 16),
-                      child: Divider(height: 1, thickness: 0.5),
+                          const SizedBox(height: 6),
+                          const SizedBox(height: 8),
+                          if (_reorderMode)
+                            const Padding(
+                              padding: EdgeInsets.only(bottom: 6),
+                              child: Text(
+                                'Drag the handle to reorder playlists.',
+                              ),
+                            ),
+                          const SizedBox(height: 2),
+                        ],
+                      ),
                     ),
                   ),
-                ],
-                if (isLoading)
-                  const SliverToBoxAdapter(
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 16),
-                      child: LinearProgressIndicator(),
-                    ),
-                  )
-                else if (filteredVideos.isNotEmpty)
-                  SliverList(
-                    delegate: SliverChildBuilderDelegate(
-                      (context, index) {
-                        final video = filteredVideos[index];
-                        final selected = _selectedVideoItemIds
-                            .contains(video.playlistItemId);
-                        return ListTile(
-                          contentPadding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                          titleAlignment: ListTileTitleAlignment.center,
-                          leading: _Thumbnail(url: video.thumbnailUrl),
-                          title: Text(video.title),
-                          tileColor: selected ? Colors.grey.shade200 : null,
-                          onTap: () {
-                            if (_deleteMode || _isSelecting) {
-                              _toggleSelection(video.playlistItemId);
-                            } else {
-                              _openVideo(video.videoId);
-                            }
-                          },
-                          onLongPress: () =>
-                              _toggleSelection(video.playlistItemId),
+                  if (hasChildPlaylists)
+                    SliverReorderableList(
+                      itemCount: filteredPlaylists.length,
+                      onReorder: (oldIndex, newIndex) async {
+                        if (newIndex > oldIndex) {
+                          newIndex -= 1;
+                        }
+                        final orderedIds = childPlaylists
+                            .map((playlist) => playlist.id)
+                            .toList();
+                        final moved = orderedIds.removeAt(oldIndex);
+                        orderedIds.insert(newIndex, moved);
+                        await widget.controller.reorderChildPlaylists(
+                          widget.playlist.id,
+                          orderedIds,
                         );
                       },
-                      childCount: filteredVideos.length,
+                      itemBuilder: (context, index) {
+                        final playlist = filteredPlaylists[index];
+                        final selected =
+                            _selectedChildPlaylistIds.contains(playlist.id);
+                        return Material(
+                          key: ValueKey(playlist.id),
+                          color: Colors.transparent,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: ListTile(
+                              minLeadingWidth: 56,
+                              contentPadding:
+                                  const EdgeInsets.fromLTRB(0, 8, 0, 8),
+                              titleAlignment: ListTileTitleAlignment.center,
+                              leading: _reorderMode
+                                  ? ReorderableDragStartListener(
+                                      index: index,
+                                      child: const Icon(Icons.drag_handle),
+                                    )
+                                  : SizedBox(
+                                      width: 56,
+                                      height: 56,
+                                      child: Center(
+                                        child: Icon(
+                                          selected
+                                              ? Icons.folder
+                                              : Icons.folder_outlined,
+                                          size: 40,
+                                        ),
+                                      ),
+                                    ),
+                              title: Text(playlist.title),
+                              trailing: _buildFlags(playlist),
+                              tileColor: selected ? Colors.grey.shade200 : null,
+                              onTap: () {
+                                if (_reorderMode) {
+                                  return;
+                                }
+                                if (_deleteMode || _isSelecting) {
+                                  _toggleChildPlaylistSelection(playlist.id);
+                                } else {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => PlaylistScreen(
+                                        controller: widget.controller,
+                                        playlist: playlist,
+                                      ),
+                                    ),
+                                  );
+                                }
+                              },
+                              onLongPress: _reorderMode
+                                  ? null
+                                  : () =>
+                                      _toggleChildPlaylistSelection(playlist.id),
+                            ),
+                          ),
+                        );
+                      },
                     ),
-                  ),
-                const SliverToBoxAdapter(child: SizedBox(height: 8)),
-              ],
+                  if (hasChildPlaylists && hasVideos) ...[
+                    const SliverToBoxAdapter(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 16),
+                        child: Divider(height: 1, thickness: 0.5),
+                      ),
+                    ),
+                  ],
+                  if (isLoading)
+                    const SliverToBoxAdapter(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 16),
+                        child: LinearProgressIndicator(),
+                      ),
+                    )
+                  else if (filteredVideos.isNotEmpty)
+                    SliverList(
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) {
+                          final video = filteredVideos[index];
+                          final selected = _selectedVideoItemIds
+                              .contains(video.playlistItemId);
+                          return ListTile(
+                            contentPadding:
+                                const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                            titleAlignment: ListTileTitleAlignment.center,
+                            leading: _Thumbnail(url: video.thumbnailUrl),
+                            title: Text(video.title),
+                            tileColor: selected ? Colors.grey.shade200 : null,
+                            onTap: () {
+                              if (_deleteMode || _isSelecting) {
+                                _toggleSelection(video.playlistItemId);
+                              } else {
+                                _openVideo(video.videoId);
+                              }
+                            },
+                            onLongPress: () =>
+                                _toggleSelection(video.playlistItemId),
+                          );
+                        },
+                        childCount: filteredVideos.length,
+                      ),
+                    ),
+                  const SliverToBoxAdapter(child: SizedBox(height: 8)),
+                ],
+              ),
             ),
           ),
           bottomNavigationBar: const SafeArea(

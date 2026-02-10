@@ -39,6 +39,8 @@ class AppController extends ChangeNotifier {
   double _searchProgress = 0;
   bool _quotaExceeded = false;
   final Map<String, List<VideoItem>> _sharedVideoCache = {};
+  final Map<String, int> _preloadAtByAccount = {};
+  static const Duration _preloadCooldown = Duration(minutes: 15);
 
   bool get isSignedIn => _account != null;
   bool get isBusy => _busy;
@@ -48,6 +50,7 @@ class AppController extends ChangeNotifier {
   double get searchProgress => _searchProgress;
   bool get isQuotaExceeded => _quotaExceeded;
   Map<String, List<VideoItem>> get sharedVideoCache => _sharedVideoCache;
+  String get _cacheKey => signedInEmail ?? 'local';
 
   Future<void> init() async {
     _account = await _signIn.signInSilently();
@@ -56,6 +59,8 @@ class AppController extends ChangeNotifier {
       await syncPlaylists();
     }
     _loadSharedVideos();
+    _loadPreloadAt();
+    _loadVideoCache();
     notifyListeners();
   }
 
@@ -71,6 +76,47 @@ class AppController extends ChangeNotifier {
           ),
         ),
       );
+  }
+
+  void _loadPreloadAt() {
+    _preloadAtByAccount
+      ..clear()
+      ..addAll(storage.loadPreloadAtByAccount());
+  }
+
+  void _loadVideoCache() {
+    final raw = storage.loadVideoCache(_cacheKey);
+    _videoCache
+      ..clear()
+      ..addAll(
+        raw.map(
+          (key, value) => MapEntry(
+            key,
+            value.map(VideoItem.fromMap).toList(),
+          ),
+        ),
+      );
+    for (final entry in _videoCache.entries) {
+      if (repository.playlistById(entry.key) != null) {
+        repository.updateVideoCount(entry.key, entry.value.length);
+      }
+    }
+  }
+
+  Future<void> _saveVideoCache() async {
+    await storage.saveVideoCache(
+      _cacheKey,
+      _videoCache.map(
+        (key, value) => MapEntry(
+          key,
+          value.map((video) => video.toMap()).toList(),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _savePreloadAt() async {
+    await storage.savePreloadAtByAccount(_preloadAtByAccount);
   }
 
   Map<String, dynamic> buildTreeExport({
@@ -270,6 +316,8 @@ class AppController extends ChangeNotifier {
     } finally {
       _setBusy(false);
     }
+    _loadPreloadAt();
+    _loadVideoCache();
     notifyListeners();
   }
 
@@ -422,6 +470,7 @@ class AppController extends ChangeNotifier {
           ),
         ),
       );
+      await _saveVideoCache();
       await storage.save(repository);
     } finally {
       _setBusy(false);
@@ -499,7 +548,7 @@ class AppController extends ChangeNotifier {
     return _videoCache.values.expand((items) => items).toList();
   }
 
-  Future<void> loadPlaylistVideos(String playlistId) async {
+  Future<void> loadPlaylistVideos(String playlistId, {bool force = false}) async {
     if (_sharedVideoCache.containsKey(playlistId)) {
       _videoCache[playlistId] = _sharedVideoCache[playlistId] ?? <VideoItem>[];
       repository.updateVideoCount(
@@ -515,6 +564,14 @@ class AppController extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    if (!force && _videoCache.containsKey(playlistId)) {
+      repository.updateVideoCount(
+        playlistId,
+        _videoCache[playlistId]?.length ?? 0,
+      );
+      notifyListeners();
+      return;
+    }
     if (_loadingVideos.contains(playlistId)) {
       return;
     }
@@ -526,6 +583,7 @@ class AppController extends ChangeNotifier {
       _videoCache[playlistId] = videos;
       repository.updateVideoCount(playlistId, videos.length);
       _setQuotaExceeded(false);
+      await _saveVideoCache();
     } catch (error) {
       _setQuotaExceeded(_isQuotaExceededError(error));
       debugPrint('YouTube playlist items failed: $error');
@@ -556,6 +614,7 @@ class AppController extends ChangeNotifier {
           .where((item) => !playlistItemIds.contains(item.playlistItemId))
           .toList();
       repository.updateVideoCount(playlistId, _videoCache[playlistId]!.length);
+      await _saveVideoCache();
     } finally {
       _setBusy(false);
       notifyListeners();
@@ -598,18 +657,26 @@ class AppController extends ChangeNotifier {
         );
       }
       _videoCache.remove(toPlaylistId);
+      await _saveVideoCache();
     } finally {
       _setBusy(false);
       notifyListeners();
     }
   }
 
-  Future<void> preloadAllVideos() async {
+  Future<void> preloadAllVideos({bool force = false}) async {
     if (_youtubeService == null || _searchLoading) {
       return;
     }
-    if (_quotaExceeded) {
+    if (!force && _quotaExceeded) {
       return;
+    }
+    if (!force) {
+      final lastAt = _preloadAtByAccount[_cacheKey] ?? 0;
+      final lastTime = DateTime.fromMillisecondsSinceEpoch(lastAt);
+      if (DateTime.now().difference(lastTime) < _preloadCooldown) {
+        return;
+      }
     }
     final playlists = repository.playlists;
     if (playlists.isEmpty) {
@@ -618,11 +685,13 @@ class AppController extends ChangeNotifier {
     _searchLoading = true;
     _searchProgress = 0;
     notifyListeners();
+    _preloadAtByAccount[_cacheKey] = DateTime.now().millisecondsSinceEpoch;
+    await _savePreloadAt();
     try {
       for (var i = 0; i < playlists.length; i += 1) {
         final playlistId = playlists[i].id;
-        if (!_videoCache.containsKey(playlistId)) {
-          await loadPlaylistVideos(playlistId);
+        if (force || !_videoCache.containsKey(playlistId)) {
+          await loadPlaylistVideos(playlistId, force: force);
         }
         if (_quotaExceeded) {
           break;

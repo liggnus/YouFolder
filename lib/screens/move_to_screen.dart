@@ -146,20 +146,25 @@ class _MoveToScreenState extends State<MoveToScreen> {
         return Scaffold(
           appBar: AppBar(
             title: Image.asset(
-              'assets/tube-folder1.jpg',
-              width: 64,
-              height: 64,
+              'assets/tube-folder1.png',
+              width: 70.4,
+              height: 70.4,
             ),
           ),
-          body: Scrollbar(
-            thumbVisibility: true,
-            interactive: true,
-            thickness: 6,
-            controller: _scrollController,
-            child: ListView(
+          body: RefreshIndicator(
+            onRefresh: () async {
+              await widget.controller.syncPlaylists();
+            },
+            child: Scrollbar(
+              thumbVisibility: true,
+              interactive: true,
+              thickness: 6,
               controller: _scrollController,
-              padding: const EdgeInsets.fromLTRB(16, 11, 16, 16),
-              children: [
+              child: ListView(
+                controller: _scrollController,
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(16, 11, 16, 16),
+                children: [
               if (widget.controller.isBusy) ...[
                 const LinearProgressIndicator(),
                 const SizedBox(height: 16),
@@ -199,7 +204,8 @@ class _MoveToScreenState extends State<MoveToScreen> {
               ),
                 if (playlists.isEmpty)
                   const Text('No playlists here.'),
-              ],
+                ],
+              ),
             ),
           ),
           bottomNavigationBar: SafeArea(
