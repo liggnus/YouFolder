@@ -22,7 +22,7 @@ class LoginScreen extends StatelessWidget {
       }
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('YouFolder login is coming soon.'),
+          content: Text('TubeFolder login is coming soon.'),
         ),
       );
     }
@@ -42,7 +42,7 @@ class LoginScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 16),
                 Text(
-                  'YouFolder',
+                  'TubeFolder',
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
                 const SizedBox(height: 8),
@@ -60,7 +60,7 @@ class LoginScreen extends StatelessWidget {
                 OutlinedButton.icon(
                   onPressed: isBusy ? null : handleYouFolderLogin,
                   icon: const Icon(Icons.account_circle_outlined),
-                  label: const Text('Login with YouFolder'),
+                  label: const Text('Login with TubeFolder'),
                 ),
                 const SizedBox(height: 20),
                 Text(

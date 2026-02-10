@@ -13,11 +13,11 @@ void main() {
     await tester.pumpWidget(
       const MaterialApp(
         home: Scaffold(
-          body: Center(child: Text('YouFolder')),
+          body: Center(child: Text('TubeFolder')),
         ),
       ),
     );
 
-    expect(find.text('YouFolder'), findsOneWidget);
+    expect(find.text('TubeFolder'), findsOneWidget);
   });
 }

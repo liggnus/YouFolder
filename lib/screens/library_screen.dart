@@ -421,17 +421,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Image.asset(
-                              'assets/app_icon.png',
-                              width: 36,
-                              height: 36,
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              'YouFolder',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleMedium
-                                  ?.copyWith(fontSize: 16),
+                              'assets/tube-folder1.jpg',
+                              width: 64,
+                              height: 64,
                             ),
                           ],
                         ),

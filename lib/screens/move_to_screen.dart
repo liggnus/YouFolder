@@ -145,7 +145,11 @@ class _MoveToScreenState extends State<MoveToScreen> {
 
         return Scaffold(
           appBar: AppBar(
-            title: const Text('Move to'),
+            title: Image.asset(
+              'assets/tube-folder1.jpg',
+              width: 64,
+              height: 64,
+            ),
           ),
           body: Scrollbar(
             thumbVisibility: true,

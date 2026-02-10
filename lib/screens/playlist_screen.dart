@@ -474,15 +474,19 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                         icon: const Icon(Icons.close),
                       )
                     : null,
-            title: Text(
-              _deleteMode
-                  ? _isSelecting
-                      ? '${_selectedVideoItemIds.length + _selectedChildPlaylistIds.length} selected'
-                      : 'Select folders or videos'
-                  : _isSelecting
-                      ? '${_selectedVideoItemIds.length + _selectedChildPlaylistIds.length} selected'
-                      : widget.playlist.title,
-            ),
+            title: _deleteMode || _isSelecting
+                ? Text(
+                    _deleteMode
+                        ? _isSelecting
+                            ? '${_selectedVideoItemIds.length + _selectedChildPlaylistIds.length} selected'
+                            : 'Select folders or videos'
+                        : '${_selectedVideoItemIds.length + _selectedChildPlaylistIds.length} selected',
+                  )
+                : Image.asset(
+                    'assets/tube-folder1.jpg',
+                    width: 64,
+                    height: 64,
+                  ),
             actions: _deleteMode
                 ? [
                     IconButton(

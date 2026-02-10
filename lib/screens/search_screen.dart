@@ -408,7 +408,11 @@ class _SearchScreenState extends State<SearchScreen> {
                 ? Text(
                     '${_selectedPlaylistIds.length + _selectedVideoItemIds.length} selected',
                   )
-                : const Text('Search'),
+                : Image.asset(
+                    'assets/tube-folder1.jpg',
+                    width: 64,
+                    height: 64,
+                  ),
             actions: _isSelecting
                 ? [
                     PopupMenuButton<String>(
