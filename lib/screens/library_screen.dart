@@ -27,6 +27,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
   final Set<String> _selectedPlaylistIds = <String>{};
   bool _reorderMode = false;
   bool _deleteMode = false;
+  bool _isTreeShareInProgress = false;
+  double _treeShareProgress = 0;
+  String _treeShareStatus = '';
   final ScrollController _scrollController = ScrollController();
 
   bool get _isSelecting => _selectedPlaylistIds.isNotEmpty;
@@ -192,31 +195,83 @@ class _LibraryScreenState extends State<LibraryScreen> {
     ];
   }
 
+  void _setTreeShareStatus(String status) {
+    if (!mounted) {
+      return;
+    }
+    setState(() => _treeShareStatus = status);
+  }
+
+  void _setTreeShareProgress(double progress) {
+    if (!mounted) {
+      return;
+    }
+    setState(() => _treeShareProgress = progress.clamp(0.0, 1.0));
+  }
+
+  Future<void> _runTreeShareWithProgress(Future<void> Function() action) async {
+    if (_isTreeShareInProgress) {
+      return;
+    }
+    setState(() {
+      _isTreeShareInProgress = true;
+      _treeShareProgress = 0;
+      _treeShareStatus = 'Preparing tree export...';
+    });
+    try {
+      await action();
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isTreeShareInProgress = false;
+          _treeShareProgress = 0;
+          _treeShareStatus = '';
+        });
+      }
+    }
+  }
+
   Future<void> _shareSelectedBranches() async {
     if (_selectedPlaylistIds.isEmpty) {
       return;
     }
-    final export = await widget.controller.buildTreeExportWithVideos(
-      name: 'Shared branch',
-      rootIds: _selectedPlaylistIds.toList(),
-    );
-    await _shareExport(export, 'youfolder-branch.json');
+    await _runTreeShareWithProgress(() async {
+      final export = await widget.controller.buildTreeExportWithVideos(
+        name: 'Shared branch',
+        rootIds: _selectedPlaylistIds.toList(),
+        onProgress: (progress, status) {
+          _setTreeShareProgress(progress);
+          _setTreeShareStatus(status);
+        },
+      );
+      await _shareExport(export, 'youfolder-branch.json');
+    });
   }
 
   Future<void> _shareEntireTree() async {
-    final export = await widget.controller.buildTreeExportWithVideos(
-      name: 'Shared tree',
-    );
-    await _shareExport(export, 'youfolder-tree.json');
+    await _runTreeShareWithProgress(() async {
+      final export = await widget.controller.buildTreeExportWithVideos(
+        name: 'Shared tree',
+        onProgress: (progress, status) {
+          _setTreeShareProgress(progress);
+          _setTreeShareStatus(status);
+        },
+      );
+      await _shareExport(export, 'youfolder-tree.json');
+    });
   }
 
   Future<void> _shareExport(
     Map<String, dynamic> export,
     String fileName,
   ) async {
+    _setTreeShareProgress(0.99);
+    _setTreeShareStatus('Creating share file...');
     final dir = await getTemporaryDirectory();
     final file = File('${dir.path}/$fileName');
     await file.writeAsString(const JsonEncoder.withIndent('  ').convert(export));
+    _setTreeShareProgress(1);
+    _setTreeShareStatus('Opening share sheet...');
     await Share.shareXFiles([XFile(file.path)]);
   }
 
@@ -447,25 +502,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
                         ),
                       ]
                     : [
-                        IconButton(
-                          tooltip: 'Search',
-                          onPressed: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) =>
-                                    SearchScreen(controller: widget.controller),
-                              ),
-                            );
-                          },
-                          icon: const Icon(Icons.search),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(
-                            minWidth: 36,
-                            minHeight: 36,
-                          ),
-                          visualDensity: VisualDensity.compact,
-                        ),
                         PopupMenuButton<String>(
                           tooltip: 'Account',
                           onSelected: (value) async {
@@ -507,9 +543,28 @@ class _LibraryScreenState extends State<LibraryScreen> {
                           icon: const Icon(Icons.account_circle_outlined),
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(
-                            minWidth: 36,
-                            minHeight: 36,
+                            minWidth: 32,
+                            minHeight: 32,
                           ),
+                        ),
+                        IconButton(
+                          tooltip: 'Search',
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) =>
+                                    SearchScreen(controller: widget.controller),
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.search),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 32,
+                            minHeight: 32,
+                          ),
+                          visualDensity: VisualDensity.compact,
                         ),
                         IconButton(
                           tooltip: 'New folder',
@@ -518,19 +573,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
                           icon: const Icon(Icons.add),
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(
-                            minWidth: 36,
-                            minHeight: 36,
-                          ),
-                          visualDensity: VisualDensity.compact,
-                        ),
-                        IconButton(
-                          tooltip: 'Delete',
-                          onPressed: _enterDeleteMode,
-                          icon: const Icon(Icons.delete_outline),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(
-                            minWidth: 36,
-                            minHeight: 36,
+                            minWidth: 32,
+                            minHeight: 32,
                           ),
                           visualDensity: VisualDensity.compact,
                         ),
@@ -542,26 +586,39 @@ class _LibraryScreenState extends State<LibraryScreen> {
                           ),
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(
-                            minWidth: 36,
-                            minHeight: 36,
+                            minWidth: 32,
+                            minHeight: 32,
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        IconButton(
+                          tooltip: 'Delete',
+                          onPressed: _enterDeleteMode,
+                          icon: const Icon(Icons.delete_outline),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 32,
+                            minHeight: 32,
                           ),
                           visualDensity: VisualDensity.compact,
                         ),
                       ],
           ),
-          body: RefreshIndicator(
-            onRefresh: () async {
-              await widget.controller.syncPlaylists();
-            },
-            child: Scrollbar(
-              thumbVisibility: true,
-              interactive: true,
-              thickness: 6,
-              controller: _scrollController,
-              child: CustomScrollView(
-                controller: _scrollController,
-                physics: const AlwaysScrollableScrollPhysics(),
-                slivers: [
+          body: Stack(
+            children: [
+              RefreshIndicator(
+                onRefresh: () async {
+                  await widget.controller.syncPlaylists();
+                },
+                child: Scrollbar(
+                  thumbVisibility: true,
+                  interactive: true,
+                  thickness: 6,
+                  controller: _scrollController,
+                  child: CustomScrollView(
+                    controller: _scrollController,
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    slivers: [
                   SliverToBoxAdapter(
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(16, 1, 16, 8),
@@ -605,9 +662,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                           ? Icons.folder
                                           : Icons.folder_outlined,
                                       size: 40,
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .onSurface,
+                                      color: Colors.grey.shade700,
+                                      weight: _selectedPlaylistIds.contains(
+                                            playlist.id,
+                                          )
+                                          ? null
+                                          : 150,
                                     ),
                                   ),
                                 ),
@@ -697,6 +757,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                               ? Icons.folder
                                               : Icons.folder_outlined,
                                           size: 40,
+                                          color: Colors.grey.shade700,
+                                          weight: selected ? null : 150,
                                         ),
                                       ),
                                     ),
@@ -721,10 +783,52 @@ class _LibraryScreenState extends State<LibraryScreen> {
                         );
                       },
                     ),
-                  const SliverToBoxAdapter(child: SizedBox(height: 8)),
-                ],
+                      const SliverToBoxAdapter(child: SizedBox(height: 8)),
+                    ],
+                  ),
+                ),
               ),
-            ),
+              if (_isTreeShareInProgress)
+                Positioned.fill(
+                  child: ColoredBox(
+                    color: Colors.black.withValues(alpha: 0.15),
+                    child: Center(
+                      child: Container(
+                        width: 260,
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.surface,
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: const [
+                            BoxShadow(
+                              blurRadius: 16,
+                              color: Colors.black26,
+                              offset: Offset(0, 6),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Sharing tree...',
+                              style: TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                            const SizedBox(height: 10),
+                            LinearProgressIndicator(value: _treeShareProgress),
+                            const SizedBox(height: 10),
+                            Text(
+                              '${(_treeShareProgress * 100).round()}% - '
+                              '$_treeShareStatus',
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
           bottomNavigationBar: const SafeArea(
             child: Padding(

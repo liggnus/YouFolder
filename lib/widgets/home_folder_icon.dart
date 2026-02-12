@@ -15,7 +15,12 @@ class HomeFolderIcon extends StatelessWidget {
       child: Stack(
         alignment: Alignment.center,
         children: [
-          Icon(Icons.folder_outlined, size: size, color: iconColor),
+          Icon(
+            Icons.folder_outlined,
+            size: size,
+            color: iconColor,
+            weight: 150,
+          ),
           Icon(Icons.home, size: size * 0.55, color: iconColor),
         ],
       ),

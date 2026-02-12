@@ -502,6 +502,8 @@ class _SearchScreenState extends State<SearchScreen> {
                                           ? Icons.folder
                                           : Icons.folder_outlined,
                                       size: 40,
+                                      color: Colors.grey.shade700,
+                                      weight: selected ? null : 150,
                                     ),
                                   ),
                                 ),
@@ -569,6 +571,8 @@ class _SearchScreenState extends State<SearchScreen> {
                                       ? Icons.folder
                                       : Icons.folder_outlined,
                                   size: 40,
+                                  color: Colors.grey.shade700,
+                                  weight: selected ? null : 150,
                                 ),
                               ),
                             ),

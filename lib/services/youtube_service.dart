@@ -43,6 +43,13 @@ class YouTubeService {
 
 
   Future<List<yt.PlaylistItem>> fetchPlaylistItems(String playlistId) async {
+    return fetchPlaylistItemsWithProgress(playlistId);
+  }
+
+  Future<List<yt.PlaylistItem>> fetchPlaylistItemsWithProgress(
+    String playlistId, {
+    void Function(int loaded)? onProgress,
+  }) async {
     final items = <yt.PlaylistItem>[];
     String? pageToken;
     do {
@@ -53,6 +60,7 @@ class YouTubeService {
         pageToken: pageToken,
       );
       items.addAll(response.items ?? []);
+      onProgress?.call(items.length);
       pageToken = response.nextPageToken;
     } while (pageToken != null && pageToken.isNotEmpty);
     return items;

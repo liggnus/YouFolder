@@ -273,7 +273,12 @@ class _FolderTile extends StatelessWidget {
           width: 56,
           height: 56,
           child: Center(
-            child: Icon(icon, size: iconSize),
+            child: Icon(
+              icon,
+              size: iconSize,
+              color: icon == Icons.folder_outlined ? Colors.grey.shade700 : null,
+              weight: icon == Icons.folder_outlined ? 150 : null,
+            ),
           ),
         ),
         title: Text(title),

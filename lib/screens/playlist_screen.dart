@@ -505,25 +505,6 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                         ),
                       ]
                     : [
-                        IconButton(
-                          tooltip: 'Search',
-                          onPressed: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) =>
-                                    SearchScreen(controller: widget.controller),
-                              ),
-                            );
-                          },
-                          icon: const Icon(Icons.search),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(
-                            minWidth: 36,
-                            minHeight: 36,
-                          ),
-                          visualDensity: VisualDensity.compact,
-                        ),
                         PopupMenuButton<String>(
                           tooltip: 'Account',
                           onSelected: (value) async {
@@ -553,9 +534,28 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                           icon: const Icon(Icons.account_circle_outlined),
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(
-                            minWidth: 36,
-                            minHeight: 36,
+                            minWidth: 32,
+                            minHeight: 32,
                           ),
+                        ),
+                        IconButton(
+                          tooltip: 'Search',
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) =>
+                                    SearchScreen(controller: widget.controller),
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.search),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 32,
+                            minHeight: 32,
+                          ),
+                          visualDensity: VisualDensity.compact,
                         ),
                         IconButton(
                           tooltip: 'New folder',
@@ -565,19 +565,8 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                           icon: const Icon(Icons.add),
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(
-                            minWidth: 36,
-                            minHeight: 36,
-                          ),
-                          visualDensity: VisualDensity.compact,
-                        ),
-                        IconButton(
-                          tooltip: 'Delete',
-                          onPressed: _enterDeleteMode,
-                          icon: const Icon(Icons.delete_outline),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(
-                            minWidth: 36,
-                            minHeight: 36,
+                            minWidth: 32,
+                            minHeight: 32,
                           ),
                           visualDensity: VisualDensity.compact,
                         ),
@@ -589,8 +578,19 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                           ),
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(
-                            minWidth: 36,
-                            minHeight: 36,
+                            minWidth: 32,
+                            minHeight: 32,
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        IconButton(
+                          tooltip: 'Delete',
+                          onPressed: _enterDeleteMode,
+                          icon: const Icon(Icons.delete_outline),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 32,
+                            minHeight: 32,
                           ),
                           visualDensity: VisualDensity.compact,
                         ),
@@ -717,6 +717,8 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                                               ? Icons.folder
                                               : Icons.folder_outlined,
                                           size: 40,
+                                          color: Colors.grey.shade700,
+                                          weight: selected ? null : 150,
                                         ),
                                       ),
                                     ),

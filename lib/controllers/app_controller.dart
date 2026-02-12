@@ -269,11 +269,18 @@ class AppController extends ChangeNotifier {
   Future<Map<String, dynamic>> buildTreeExportWithVideos({
     required String name,
     List<String>? rootIds,
+    void Function(double progress, String status)? onProgress,
   }) async {
+    void report(double progress, String status) {
+      onProgress?.call(progress.clamp(0.0, 1.0), status);
+    }
+
+    report(0, 'Preparing tree export...');
     final export = buildTreeExport(name: name, rootIds: rootIds);
     export['sharedBy'] = signedInEmail ?? '';
     if (_youtubeService == null) {
       export['videosByPlaylist'] = <String, List<Map<String, dynamic>>>{};
+      report(1, 'Export ready');
       return export;
     }
     final playlists = (export['playlists'] as List?)
@@ -282,9 +289,59 @@ class AppController extends ChangeNotifier {
             .whereType<String>()
             .toList() ??
         <String>[];
-    for (final playlistId in playlists) {
-      await loadPlaylistVideos(playlistId);
+    final expectedVideosByPlaylist = <String, int>{
+      for (final playlistId in playlists)
+        playlistId: (repository.playlistById(playlistId)?.videoCount ?? 0),
+    };
+    var totalExpectedVideos = expectedVideosByPlaylist.values.fold<int>(
+      0,
+      (sum, count) => sum + count,
+    );
+    var processedPlaylists = 0;
+    var processedVideos = 0;
+
+    double computeProgress(int currentPlaylistVideos) {
+      final totalUnits = playlists.length + totalExpectedVideos;
+      if (totalUnits <= 0) {
+        return 0;
+      }
+      final completedUnits =
+          processedPlaylists + processedVideos + currentPlaylistVideos;
+      return completedUnits / totalUnits;
     }
+
+    for (var i = 0; i < playlists.length; i += 1) {
+      final playlistId = playlists[i];
+      var currentPlaylistVideos = 0;
+      report(
+        computeProgress(0),
+        'Loading videos ${i + 1}/${playlists.length}',
+      );
+      await loadPlaylistVideos(
+        playlistId,
+        onProgress: (loaded) {
+          final previousExpected = expectedVideosByPlaylist[playlistId] ?? 0;
+          if (loaded > previousExpected) {
+            totalExpectedVideos += loaded - previousExpected;
+            expectedVideosByPlaylist[playlistId] = loaded;
+          }
+          currentPlaylistVideos = loaded;
+          report(
+            computeProgress(currentPlaylistVideos),
+            'Loading videos ${i + 1}/${playlists.length} '
+            '(${processedVideos + currentPlaylistVideos}/$totalExpectedVideos)',
+          );
+        },
+      );
+      processedPlaylists += 1;
+      processedVideos += expectedVideosByPlaylist[playlistId] ?? 0;
+      report(
+        computeProgress(0),
+        'Processed $processedPlaylists/${playlists.length} playlists',
+      );
+    }
+
+    report(0.98, 'Packaging export...');
     final videosByPlaylist = <String, List<Map<String, dynamic>>>{};
     for (final playlistId in playlists) {
       final videos = _videoCache[playlistId] ?? <VideoItem>[];
@@ -302,6 +359,7 @@ class AppController extends ChangeNotifier {
           .toList();
     }
     export['videosByPlaylist'] = videosByPlaylist;
+    report(1, 'Export ready');
     return export;
   }
 
@@ -548,19 +606,25 @@ class AppController extends ChangeNotifier {
     return _videoCache.values.expand((items) => items).toList();
   }
 
-  Future<void> loadPlaylistVideos(String playlistId, {bool force = false}) async {
+  Future<void> loadPlaylistVideos(
+    String playlistId, {
+    bool force = false,
+    ValueChanged<int>? onProgress,
+  }) async {
     if (_sharedVideoCache.containsKey(playlistId)) {
       _videoCache[playlistId] = _sharedVideoCache[playlistId] ?? <VideoItem>[];
       repository.updateVideoCount(
         playlistId,
         _videoCache[playlistId]?.length ?? 0,
       );
+      onProgress?.call(_videoCache[playlistId]?.length ?? 0);
       notifyListeners();
       return;
     }
     if (_youtubeService == null) {
       _videoCache[playlistId] = <VideoItem>[];
       repository.updateVideoCount(playlistId, 0);
+      onProgress?.call(0);
       notifyListeners();
       return;
     }
@@ -569,6 +633,7 @@ class AppController extends ChangeNotifier {
         playlistId,
         _videoCache[playlistId]?.length ?? 0,
       );
+      onProgress?.call(_videoCache[playlistId]?.length ?? 0);
       notifyListeners();
       return;
     }
@@ -578,7 +643,10 @@ class AppController extends ChangeNotifier {
     _loadingVideos.add(playlistId);
     notifyListeners();
     try {
-      final items = await _youtubeService!.fetchPlaylistItems(playlistId);
+      final items = await _youtubeService!.fetchPlaylistItemsWithProgress(
+        playlistId,
+        onProgress: onProgress,
+      );
       final videos = items.map((item) => _mapVideo(item)).toList();
       _videoCache[playlistId] = videos;
       repository.updateVideoCount(playlistId, videos.length);
